@@ -1,8 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const nodemailer = require('nodemailer');
-const dns = require('dns');
+const { Resend } = require('resend');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
@@ -12,9 +11,6 @@ const Otp = require('./models/Otp');
 
 const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, proto, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-
-// Force DNS to resolve IPv4 first across all node requests
-dns.setDefaultResultOrder('ipv4first');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -28,21 +24,13 @@ let isWaReady = false;
 let blockedAttemptsCounter = 0;
 
 // Master Credentials
-const EMAIL_USER = process.env.EMAIL_USER || "aryantomar4329@gmail.com";
-const EMAIL_PASS = process.env.EMAIL_PASS || "keyyihkenfqsnohx";
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "re_4RPGFqkf_CofXZScqCNDL9wewWwGKawwC";
 
-// Direct SMTP Transporter with strict IPv4
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: EMAIL_USER,
-    pass: EMAIL_PASS
-  }
-});
+const resend = new Resend(RESEND_API_KEY);
 
 // MongoDB Session Store for WhatsApp
 const sessionSchema = new mongoose.Schema({
@@ -260,7 +248,7 @@ app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
   }
 });
 
-// --- 1. SEND OTP ROUTE ---
+// --- 1. SEND OTP ROUTE (Resend HTTPS API) ---
 app.post('/api/send-otp', otpLimiter, async (req, res) => {
   try {
     const { identifier, channel } = req.body;
@@ -291,13 +279,18 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     console.log(`========================================`);
 
     if (selectedChannel === 'email') {
-      await transporter.sendMail({
-        from: `"Security Auth" <${EMAIL_USER}>`,
-        to: target,
+      const { data, error } = await resend.emails.send({
+        from: 'Auth <onboarding@resend.dev>',
+        to: [target],
         subject: `${rawOtp} is your verification code`,
         html: `<h2>Your Verification OTP is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes. Do not share this code.</p>`
       });
-      console.log(`✅ Email sent successfully to ${target}`);
+
+      if (error) {
+        console.error('Resend API Error:', error);
+        throw new Error(error.message);
+      }
+      console.log('✅ Email Delivered via Resend HTTPS API:', data.id);
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
     } else if (selectedChannel === 'telegram') {
