@@ -28,8 +28,8 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
-const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "YOUR_TELEGRAM_BOT_TOKEN";
-const TELEGRAM_BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || "MyOtpSystemBot"; // अपने बॉट का यूज़रनेम यहाँ डालो
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "8138977931:AAFFZJ2uQ_Nf9F0t3u_XG9k_YOUR_TOKEN";
+const TELEGRAM_BOT_USERNAME = "Otp_maaster_bot";
 
 const RESEND_FALLBACK_KEY = Buffer.from("UmVfUU16R29GUVZfQ1ZmZFNGZlNWbkd6UEwxRHFkVzlvTmdH", "base64").toString();
 const resend = new Resend(process.env.RESEND_API_KEY || RESEND_FALLBACK_KEY);
@@ -150,13 +150,13 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// Telegram Polling Engine (Listens for deep-link start with phone)
+// Telegram Polling Engine (Listens for bot /start with Phone deep-link)
 let lastUpdateId = 0;
 async function startTelegramPoller() {
   if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN') return;
 
   try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=25`;
     const res = await fetch(url);
     const data = await res.json();
 
@@ -171,28 +171,30 @@ async function startTelegramPoller() {
 
         if (text.startsWith('/start')) {
           const parts = text.split(' ');
-          const payload = parts[1]; // Payload is phone number or token
+          const payload = parts[1]; // Phone Number or Chat ID Identifier
 
           if (payload) {
-            const cleanPhone = cleanTarget(payload, 'telegram');
-            const record = await Otp.findOne({ identifier: cleanPhone, channel: 'telegram' });
+            const cleanTargetId = cleanTarget(payload, 'telegram');
+            const record = await Otp.findOne({ 
+              $or: [{ identifier: cleanTargetId }, { identifier: payload }],
+              channel: 'telegram' 
+            });
 
-            if (record) {
-              await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp || 'Check Screen'}\`\n\nValid for 5 Minutes.`);
-              // Save Chat ID to user
-              await User.findOneAndUpdate({ identifier: cleanPhone }, { telegramChatId: chatId }, { upsert: true });
+            if (record && record.rawOtp) {
+              await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\nValid for 5 Minutes.`);
+              await User.findOneAndUpdate({ identifier: cleanTargetId }, { telegramChatId: chatId.toString() }, { upsert: true });
             } else {
-              await sendTelegramMessage(chatId, `⚠️ No active OTP request found for this phone number. Please request a new OTP from the portal.`);
+              await sendTelegramMessage(chatId, `⚠️ No active OTP request found. Please enter your Phone/Chat ID on the portal first.`);
             }
           } else {
-            await sendTelegramMessage(chatId, `👋 Welcome! Request an OTP on our portal with Telegram selected, then click the instant verification button.`);
+            await sendTelegramMessage(chatId, `👋 Your Telegram Chat ID is: \`${chatId}\`\n\nYou can use this Chat ID or your Phone Number on our portal to receive OTPs.`);
           }
         }
       }
     }
   } catch (e) {}
 
-  setTimeout(startTelegramPoller, 1000);
+  setTimeout(startTelegramPoller, 1200);
 }
 
 function sendTelegramMessage(chatId, text) {
@@ -228,9 +230,15 @@ const otpLimiter = rateLimit({
 });
 
 function cleanTarget(id, channel) {
-  if (channel === 'whatsapp' || channel === 'telegram') {
+  if (channel === 'whatsapp') {
     const digits = id.replace(/\D/g, '');
     return digits.length === 10 ? `91${digits}` : digits;
+  }
+  if (channel === 'telegram') {
+    const digits = id.replace(/\D/g, '');
+    // If it's a 10 digit Indian mobile number
+    if (digits.length === 10) return `91${digits}`;
+    return id.trim();
   }
   return id.trim();
 }
@@ -337,10 +345,15 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
     } else if (selectedChannel === 'telegram') {
-      // If user already linked Telegram chat ID in the past, send direct message
-      if (existingUser && existingUser.telegramChatId) {
+      // Check if target is a direct numerical Chat ID (usually 8-10 digits without leading 91)
+      const isDirectChatId = /^\d{7,10}$/.test(identifier.trim());
+
+      if (isDirectChatId) {
+        await sendTelegramMessage(identifier.trim(), `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\nValid for 5 Minutes.`);
+      } else if (existingUser && existingUser.telegramChatId) {
         await sendTelegramMessage(existingUser.telegramChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\nValid for 5 Minutes.`);
       }
+
       telegramDeepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${target}`;
     }
 
@@ -392,7 +405,7 @@ app.post('/api/verify-otp', async (req, res) => {
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
 
     const user = await User.findOneAndUpdate(
-      { identifier: target },
+      { $or: [{ identifier: target }, { identifier: identifier.trim() }] },
       { 
         $set: { 
           identifier: target,

@@ -33,12 +33,12 @@
     <p class="sub">Choose where you want your verification OTP</p>
 
     <div class="channel-group">
-      <button class="channel-btn" onclick="selectChannel('email')" id="btn-email">✉️ Email</button>
+      <button class="channel-btn active" onclick="selectChannel('email')" id="btn-email">✉️ Email</button>
       <button class="channel-btn" onclick="selectChannel('telegram')" id="btn-telegram">✈️ Telegram</button>
-      <button class="channel-btn active" onclick="selectChannel('whatsapp')" id="btn-whatsapp">💬 WhatsApp</button>
+      <button class="channel-btn" onclick="selectChannel('whatsapp')" id="btn-whatsapp">💬 WhatsApp</button>
     </div>
 
-    <input type="text" id="target-input" placeholder="Enter Phone (e.g. 9926888306)" />
+    <input type="text" id="target-input" placeholder="Enter Email (e.g. aryantomar4329@gmail.com)" />
     <button class="btn" id="send-btn" onclick="sendOtp()">Send OTP</button>
     <div class="msg" id="send-msg"></div>
   </div>
@@ -49,7 +49,7 @@
     <p class="sub" id="verify-sub">Code sent to your destination</p>
 
     <!-- Deep Link Telegram Button -->
-    <a href="#" target="_blank" id="tg-btn" class="btn btn-tg" style="display: none;">✈️ Open Telegram to Receive OTP</a>
+    <a href="#" target="_blank" id="tg-btn" class="btn btn-tg" style="display: none;">✈️ Click to Receive OTP on Telegram</a>
 
     <div class="otp-inputs">
       <input type="text" maxlength="1" class="otp-box" oninput="moveNext(this, 0)" />
@@ -79,7 +79,7 @@
   </div>
 
   <script>
-    let activeChannel = 'whatsapp';
+    let activeChannel = 'email';
     let currentTarget = '';
 
     function selectChannel(ch) {
@@ -87,7 +87,14 @@
       document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
       document.getElementById('btn-' + ch).classList.add('active');
       const input = document.getElementById('target-input');
-      input.placeholder = ch === 'email' ? 'Enter Email (e.g. name@gmail.com)' : 'Enter Phone Number (e.g. 9926888306)';
+      
+      if (ch === 'email') {
+        input.placeholder = 'Enter Email (e.g. aryantomar4329@gmail.com)';
+      } else if (ch === 'telegram') {
+        input.placeholder = 'Enter Phone (9926888306) OR Chat ID';
+      } else {
+        input.placeholder = 'Enter Phone (e.g. 9926888306)';
+      }
     }
 
     async function sendOtp() {
@@ -119,7 +126,7 @@
           document.getElementById('step-verify').style.display = 'block';
           document.getElementById('verify-sub').textContent = `Code requested for ${currentTarget}`;
 
-          if (data.telegramDeepLink) {
+          if (activeChannel === 'telegram' && data.telegramDeepLink) {
             const tgBtn = document.getElementById('tg-btn');
             tgBtn.href = data.telegramDeepLink;
             tgBtn.style.display = 'block';
