@@ -15,8 +15,9 @@
     .channel-btn.active { background: #6366f1; color: #fff; border-color: #6366f1; font-weight: 600; }
     input { width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid #334155; background: #0a0f1d; color: #fff; font-size: 15px; margin-bottom: 16px; outline: none; }
     input:focus { border-color: #6366f1; }
-    .btn { width: 100%; padding: 14px; background: #6366f1; border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+    .btn { width: 100%; padding: 14px; background: #6366f1; border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
     .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn-tg { background: #0284c7; margin-bottom: 16px; }
     .otp-inputs { display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; }
     .otp-box { width: 45px; height: 50px; text-align: center; font-size: 20px; font-weight: bold; border-radius: 8px; border: 1px solid #334155; background: #0a0f1d; color: #fff; }
     .msg { margin-top: 14px; font-size: 13px; min-height: 18px; }
@@ -37,7 +38,7 @@
       <button class="channel-btn active" onclick="selectChannel('whatsapp')" id="btn-whatsapp">💬 WhatsApp</button>
     </div>
 
-    <input type="text" id="target-input" placeholder="Enter Phone Number (e.g. 9926888306)" />
+    <input type="text" id="target-input" placeholder="Enter Phone (e.g. 9926888306)" />
     <button class="btn" id="send-btn" onclick="sendOtp()">Send OTP</button>
     <div class="msg" id="send-msg"></div>
   </div>
@@ -46,6 +47,9 @@
   <div class="card" id="step-verify" style="display: none;">
     <h2>Verification Code</h2>
     <p class="sub" id="verify-sub">Code sent to your destination</p>
+
+    <!-- Deep Link Telegram Button -->
+    <a href="#" target="_blank" id="tg-btn" class="btn btn-tg" style="display: none;">✈️ Open Telegram to Receive OTP</a>
 
     <div class="otp-inputs">
       <input type="text" maxlength="1" class="otp-box" oninput="moveNext(this, 0)" />
@@ -83,7 +87,7 @@
       document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
       document.getElementById('btn-' + ch).classList.add('active');
       const input = document.getElementById('target-input');
-      input.placeholder = ch === 'email' ? 'Enter Email (e.g. name@gmail.com)' : (ch === 'telegram' ? 'Enter Telegram Chat ID' : 'Enter Phone (e.g. 9926888306)');
+      input.placeholder = ch === 'email' ? 'Enter Email (e.g. name@gmail.com)' : 'Enter Phone Number (e.g. 9926888306)';
     }
 
     async function sendOtp() {
@@ -113,7 +117,16 @@
         if (res.ok) {
           document.getElementById('step-send').style.display = 'none';
           document.getElementById('step-verify').style.display = 'block';
-          document.getElementById('verify-sub').textContent = `Code sent to ${currentTarget}`;
+          document.getElementById('verify-sub').textContent = `Code requested for ${currentTarget}`;
+
+          if (data.telegramDeepLink) {
+            const tgBtn = document.getElementById('tg-btn');
+            tgBtn.href = data.telegramDeepLink;
+            tgBtn.style.display = 'block';
+          } else {
+            document.getElementById('tg-btn').style.display = 'none';
+          }
+
           document.querySelectorAll('.otp-box')[0].focus();
         } else {
           msg.className = 'msg msg-error';

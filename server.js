@@ -28,8 +28,9 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "YOUR_TELEGRAM_BOT_TOKEN";
+const TELEGRAM_BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || "MyOtpSystemBot"; // अपने बॉट का यूज़रनेम यहाँ डालो
 
-// Base64 Encoded Key (Re_QMzGoFQV_CVfdSFfSVnGzPL1DqdW9oNgG)
 const RESEND_FALLBACK_KEY = Buffer.from("UmVfUU16R29GUVZfQ1ZmZFNGZlNWbkd6UEwxRHFkVzlvTmdH", "base64").toString();
 const resend = new Resend(process.env.RESEND_API_KEY || RESEND_FALLBACK_KEY);
 
@@ -139,6 +140,7 @@ async function connectToWhatsApp() {
 const userSchema = new mongoose.Schema({
   identifier: { type: String, required: true, unique: true },
   channel: { type: String, enum: ['email', 'telegram', 'whatsapp'], default: 'email' },
+  telegramChatId: { type: String },
   lastLogin: { type: Date, default: Date.now },
   role: { type: String, default: 'Member' },
   isBanned: { type: Boolean, default: false },
@@ -147,6 +149,58 @@ const userSchema = new mongoose.Schema({
 }, { strict: false });
 
 const User = mongoose.model('User', userSchema);
+
+// Telegram Polling Engine (Listens for deep-link start with phone)
+let lastUpdateId = 0;
+async function startTelegramPoller() {
+  if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN') return;
+
+  try {
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=30`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (data.ok && data.result.length > 0) {
+      for (const update of data.result) {
+        lastUpdateId = update.update_id;
+        const msg = update.message;
+        if (!msg || !msg.text) continue;
+
+        const chatId = msg.chat.id;
+        const text = msg.text.trim();
+
+        if (text.startsWith('/start')) {
+          const parts = text.split(' ');
+          const payload = parts[1]; // Payload is phone number or token
+
+          if (payload) {
+            const cleanPhone = cleanTarget(payload, 'telegram');
+            const record = await Otp.findOne({ identifier: cleanPhone, channel: 'telegram' });
+
+            if (record) {
+              await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp || 'Check Screen'}\`\n\nValid for 5 Minutes.`);
+              // Save Chat ID to user
+              await User.findOneAndUpdate({ identifier: cleanPhone }, { telegramChatId: chatId }, { upsert: true });
+            } else {
+              await sendTelegramMessage(chatId, `⚠️ No active OTP request found for this phone number. Please request a new OTP from the portal.`);
+            }
+          } else {
+            await sendTelegramMessage(chatId, `👋 Welcome! Request an OTP on our portal with Telegram selected, then click the instant verification button.`);
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  setTimeout(startTelegramPoller, 1000);
+}
+
+function sendTelegramMessage(chatId, text) {
+  return new Promise((resolve) => {
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(text)}&parse_mode=Markdown`;
+    require('https').get(url, () => resolve(true)).on('error', () => resolve(false));
+  });
+}
 
 function requireAdmin(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -174,7 +228,7 @@ const otpLimiter = rateLimit({
 });
 
 function cleanTarget(id, channel) {
-  if (channel === 'whatsapp') {
+  if (channel === 'whatsapp' || channel === 'telegram') {
     const digits = id.replace(/\D/g, '');
     return digits.length === 10 ? `91${digits}` : digits;
   }
@@ -190,18 +244,10 @@ async function sendBaileysWhatsApp(phone, otp, meta) {
   });
 }
 
-function sendTelegramOTP(chatId, otp) {
-  return new Promise((resolve) => {
-    const text = encodeURIComponent(`🔐 *Your OTP:* \`${otp}\` (Valid for 5m)`);
-    const url = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${chatId}&text=${text}&parse_mode=Markdown`;
-    require('https').get(url, () => resolve(true)).on('error', () => resolve(false));
-  });
-}
-
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
-// --- ADMIN LOGIN API ---
+// --- ADMIN API ---
 app.post('/api/admin/login', (req, res) => {
   const { username, password } = req.body;
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
@@ -211,7 +257,6 @@ app.post('/api/admin/login', (req, res) => {
   res.status(401).json({ error: "Invalid admin credentials" });
 });
 
-// --- ADMIN GENERATE PAIRING CODE API ---
 app.post('/api/admin/generate-pairing', requireAdmin, async (req, res) => {
   try {
     const { phone } = req.body;
@@ -226,7 +271,6 @@ app.post('/api/admin/generate-pairing', requireAdmin, async (req, res) => {
   }
 });
 
-// --- ADMIN STATUS & METRICS API ---
 app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
@@ -238,7 +282,6 @@ app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
   }
 });
 
-// --- ADMIN BAN / UNBAN API ---
 app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
   try {
     const { identifier, isBanned } = req.body;
@@ -273,11 +316,13 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     const otpHash = await bcrypt.hash(rawOtp, salt);
 
-    await Otp.create({ identifier: target, channel: selectedChannel, otpHash });
+    await Otp.create({ identifier: target, channel: selectedChannel, otpHash, rawOtp });
 
     console.log(`\n========================================`);
     console.log(`⚡ OTP: ${rawOtp} | Target: ${target} (${selectedChannel})`);
     console.log(`========================================`);
+
+    let telegramDeepLink = null;
 
     if (selectedChannel === 'email') {
       const { data, error } = await resend.emails.send({
@@ -287,18 +332,23 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
         html: `<h2>Your Verification OTP is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes. Do not share this code.</p>`
       });
 
-      if (error) {
-        console.error('Resend API Error:', error);
-        throw new Error(error.message);
-      }
+      if (error) throw new Error(error.message);
       console.log('✅ Email Delivered via Resend:', data);
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
     } else if (selectedChannel === 'telegram') {
-      await sendTelegramOTP(target, rawOtp);
+      // If user already linked Telegram chat ID in the past, send direct message
+      if (existingUser && existingUser.telegramChatId) {
+        await sendTelegramMessage(existingUser.telegramChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\nValid for 5 Minutes.`);
+      }
+      telegramDeepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${target}`;
     }
 
-    res.status(200).json({ success: true, message: `OTP sent via ${selectedChannel.toUpperCase()}` });
+    res.status(200).json({
+      success: true,
+      message: `OTP sent via ${selectedChannel.toUpperCase()}`,
+      telegramDeepLink
+    });
   } catch (error) {
     console.error("Send Error:", error);
     res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
@@ -376,6 +426,7 @@ mongoose.connect(MONGO_URI)
       await mongoose.connection.collection('users').dropIndex('email_1');
     } catch (e) {}
     connectToWhatsApp();
+    startTelegramPoller();
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   })
   .catch(err => console.error(err));
