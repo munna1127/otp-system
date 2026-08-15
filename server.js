@@ -29,12 +29,23 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
 
-// Direct Hardcoded Telegram Credentials
+// Hardcoded Telegram Master Settings
 const TELEGRAM_BOT_TOKEN = "8883602658:AAFCBU992gUVE8PE7YgIPQX26i_IiXFHrPg";
-const DEFAULT_TELEGRAM_CHAT_ID = "6508791739";
 
 const RESEND_FALLBACK_KEY = Buffer.from("UmVfUU16R29GUVZfQ1ZmZFNGZlNWbkd6UEwxRHFkVzlvTmdH", "base64").toString();
 const resend = new Resend(process.env.RESEND_API_KEY || RESEND_FALLBACK_KEY);
+
+// Helper: Extract Clean 10-digit number & formats
+function getPhoneVariants(input) {
+  const digits = input.replace(/\D/g, '');
+  const last10 = digits.slice(-10);
+  return {
+    raw: input.trim(),
+    last10: last10,
+    with91: `91${last10}`,
+    withPlus91: `+91${last10}`
+  };
+}
 
 // MongoDB Session Store for WhatsApp
 const sessionSchema = new mongoose.Schema({
@@ -140,7 +151,7 @@ async function connectToWhatsApp() {
 
 // User Schema
 const userSchema = new mongoose.Schema({
-  identifier: { type: String, required: true, unique: true },
+  identifier: { type: String, required: true },
   channel: { type: String, enum: ['email', 'telegram', 'whatsapp'], default: 'email' },
   telegramChatId: { type: String },
   lastLogin: { type: Date, default: Date.now },
@@ -152,9 +163,9 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// Guaranteed Direct Telegram Dispatch Function
+// Universal Telegram Sender
 function sendTelegramMessage(chatId, text) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const body = JSON.stringify({
       chat_id: chatId,
       text: text,
@@ -176,10 +187,10 @@ function sendTelegramMessage(chatId, text) {
         try {
           const parsed = JSON.parse(data);
           if (parsed.ok) {
-            console.log(`✅ [TELEGRAM DISPATCHED] Sent directly to Chat ID: ${chatId}`);
+            console.log(`✅ Telegram Delivered to Chat ID: ${chatId}`);
             resolve(true);
           } else {
-            console.error('Telegram Dispatch Error:', parsed);
+            console.error('Telegram Error:', parsed);
             resolve(false);
           }
         } catch (e) {
@@ -188,11 +199,7 @@ function sendTelegramMessage(chatId, text) {
       });
     });
 
-    req.on('error', (err) => {
-      console.error('Telegram Network Error:', err);
-      resolve(false);
-    });
-
+    req.on('error', () => resolve(false));
     req.write(body);
     req.end();
   });
@@ -222,15 +229,6 @@ const otpLimiter = rateLimit({
     res.status(429).json({ error: "Rate limit exceeded. Access temporarily blocked." });
   }
 });
-
-function cleanTarget(id, channel) {
-  if (channel === 'whatsapp' || channel === 'telegram') {
-    const digits = id.replace(/\D/g, '');
-    if (digits.length === 10) return `91${digits}`;
-    return digits.length > 0 ? digits : id.trim();
-  }
-  return id.trim();
-}
 
 async function sendBaileysWhatsApp(phone, otp, meta) {
   if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is not linked. Open /admin to generate Pairing Code.');
@@ -296,11 +294,17 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     if (!identifier) return res.status(400).json({ error: "Identifier required" });
 
     const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
-    const target = cleanTarget(identifier, selectedChannel);
-    const rawTarget = identifier.trim();
+    const variants = getPhoneVariants(identifier);
+    const target = selectedChannel === 'email' ? identifier.trim() : variants.with91;
 
+    // Search existing user with all number variants
     const existingUser = await User.findOne({
-      $or: [{ identifier: target }, { identifier: rawTarget }]
+      $or: [
+        { identifier: target },
+        { identifier: variants.raw },
+        { identifier: variants.last10 },
+        { identifier: variants.withPlus91 }
+      ]
     });
 
     if (existingUser && existingUser.isBanned) {
@@ -311,8 +315,14 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
 
+    // Delete existing OTPs across all variants
     await Otp.deleteMany({
-      $or: [{ identifier: target }, { identifier: rawTarget }]
+      $or: [
+        { identifier: target },
+        { identifier: variants.raw },
+        { identifier: variants.last10 },
+        { identifier: variants.withPlus91 }
+      ]
     });
 
     const rawOtp = crypto.randomInt(100000, 999999).toString();
@@ -338,15 +348,25 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
     } else if (selectedChannel === 'telegram') {
-      // Determine destination Chat ID (Direct numerical ID or user mapping or fallback)
-      let destinationChatId = DEFAULT_TELEGRAM_CHAT_ID;
-      if (/^\d{7,11}$/.test(rawTarget) && !rawTarget.startsWith('9199') && !rawTarget.startsWith('919')) {
-        destinationChatId = rawTarget;
-      } else if (existingUser && existingUser.telegramChatId) {
+      // Determine destination Chat ID
+      let destinationChatId = null;
+
+      // 1. Direct Telegram Chat ID (7-11 digits)
+      if (/^\d{7,11}$/.test(variants.raw) && !variants.raw.startsWith('919') && !variants.raw.startsWith('99')) {
+        destinationChatId = variants.raw;
+      }
+      // 2. Mapped Chat ID from Database via any phone format
+      if (!destinationChatId && existingUser && existingUser.telegramChatId) {
         destinationChatId = existingUser.telegramChatId;
       }
+      // 3. Fallback direct mapped ID
+      if (!destinationChatId && (variants.last10 === '9926888306')) {
+        destinationChatId = '6508791739';
+      }
 
-      await sendTelegramMessage(destinationChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n📍 *Target:* \`${target}\``);
+      if (destinationChatId) {
+        await sendTelegramMessage(destinationChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n📍 *Identifier:* ${target}`);
+      }
     }
 
     res.status(200).json({
@@ -365,14 +385,16 @@ app.post('/api/verify-otp', async (req, res) => {
     const { identifier, otp } = req.body;
     if (!identifier || !otp) return res.status(400).json({ error: "Missing fields" });
 
-    let target = identifier.trim();
-    if (/^\+?\d+$/.test(target.replace(/\s+/g, ''))) {
-      const digits = target.replace(/\D/g, '');
-      target = digits.length === 10 ? `91${digits}` : digits;
-    }
+    const variants = getPhoneVariants(identifier);
+    const target = identifier.includes('@') ? identifier.trim() : variants.with91;
 
     const record = await Otp.findOne({ 
-      $or: [{ identifier: target }, { identifier: identifier.trim() }] 
+      $or: [
+        { identifier: target },
+        { identifier: variants.raw },
+        { identifier: variants.last10 },
+        { identifier: variants.withPlus91 }
+      ] 
     });
 
     if (!record) return res.status(400).json({ error: "OTP expired or not found" });
@@ -396,7 +418,14 @@ app.post('/api/verify-otp', async (req, res) => {
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
 
     const user = await User.findOneAndUpdate(
-      { $or: [{ identifier: target }, { identifier: identifier.trim() }] },
+      { 
+        $or: [
+          { identifier: target },
+          { identifier: variants.raw },
+          { identifier: variants.last10 },
+          { identifier: variants.withPlus91 }
+        ] 
+      },
       { 
         $set: { 
           identifier: target,
