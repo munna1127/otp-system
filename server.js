@@ -29,7 +29,7 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
 
-// Hardcoded Telegram Token (Testing Only)
+// Hardcoded Master Tokens
 const TELEGRAM_BOT_TOKEN = "8883602658:AAFCBU992gUVE8PE7YgIPQX26i_IiXFHrPg";
 const TELEGRAM_BOT_USERNAME = "Otp_maaster_bot";
 
@@ -152,9 +152,9 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// Universal Telegram Link & Sender
+// Universal Telegram Sender
 function sendTelegramMessage(chatId, text) {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const body = JSON.stringify({
       chat_id: chatId,
       text: text,
@@ -176,7 +176,7 @@ function sendTelegramMessage(chatId, text) {
         try {
           const parsed = JSON.parse(data);
           if (parsed.ok) {
-            console.log(`✅ Telegram Message Sent to Chat ID: ${chatId}`);
+            console.log(`✅ Telegram Message Sent to: ${chatId}`);
             resolve(true);
           } else {
             console.error('Telegram API Error:', parsed);
@@ -198,7 +198,7 @@ function sendTelegramMessage(chatId, text) {
   });
 }
 
-// Telegram Poller for Linking & Auto Responding
+// Telegram Poller
 let lastUpdateId = 0;
 async function startTelegramPoller() {
   if (!TELEGRAM_BOT_TOKEN) return;
@@ -216,7 +216,6 @@ async function startTelegramPoller() {
 
         const chatId = msg.chat.id.toString();
 
-        // Contact sharing
         if (msg.contact && msg.contact.phone_number) {
           const rawPhone = msg.contact.phone_number.replace(/\D/g, '');
           const cleanPhone = rawPhone.length === 10 ? `91${rawPhone}` : rawPhone;
@@ -233,7 +232,7 @@ async function startTelegramPoller() {
           if (record && record.rawOtp) {
             await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\nValid for 5 Minutes.`);
           } else {
-            await sendTelegramMessage(chatId, `✅ *Phone Linked Successfully!*\n\nAb website par apna number dalkar "Send OTP" karein, turant yahan message aa jayega.`);
+            await sendTelegramMessage(chatId, `✅ *Phone Linked Successfully!*\n\nAb website par OTP request karein.`);
           }
           continue;
         }
@@ -262,7 +261,7 @@ async function startTelegramPoller() {
             await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n🌐 *Destination:* \`${record.identifier}\``);
             await User.findOneAndUpdate({ identifier: record.identifier }, { telegramChatId: chatId }, { upsert: true });
           } else {
-            await sendTelegramMessage(chatId, `👋 *Telegram Bot Connected!*\n\nYour Chat ID: \`${chatId}\`\n\nWebsite par ye Chat ID ya apna Phone Number dalein aur OTP prapt karein.`);
+            await sendTelegramMessage(chatId, `👋 *Telegram Bot Ready!*\n\nYour Chat ID: \`${chatId}\``);
           }
         }
       }
@@ -414,10 +413,13 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
     } else if (selectedChannel === 'telegram') {
-      const isDirectChatId = /^\d{7,11}$/.test(rawTarget) && !rawTarget.startsWith('9199') && !rawTarget.startsWith('919') ? rawTarget : null;
+      // Variable declared properly
+      let isDirectChatId = false;
+      if (/^\d{7,11}$/.test(rawTarget) && !rawTarget.startsWith('9199') && !rawTarget.startsWith('919')) {
+        isDirectChatId = true;
+      }
       
-      // Fallback ID handling
-      const targetChatId = directChatId || existingUser?.telegramChatId || (rawTarget === '9926888306' || rawTarget === '919926888306' ? '6508791739' : null);
+      const targetChatId = isDirectChatId ? rawTarget : (existingUser?.telegramChatId || (rawTarget.includes('9926888306') ? '6508791739' : null));
 
       if (targetChatId) {
         await sendTelegramMessage(targetChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n📍 *Destination:* ${target}`);
