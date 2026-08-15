@@ -13,6 +13,10 @@ const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, prot
 const pino = require('pino');
 
 const app = express();
+
+// Fix Render Reverse Proxy
+app.set('trust proxy', 1);
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -21,7 +25,7 @@ let waSock = null;
 let isWaReady = false;
 let blockedAttemptsCounter = 0;
 
-// 1. MONGODB-BASED PERMANENT WHATSAPP SESSION (Survives all Render Deploys)
+// MongoDB Session Store for WhatsApp
 const sessionSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   data: { type: String, required: true }
@@ -110,7 +114,6 @@ async function connectToWhatsApp() {
         isWaReady = false;
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-        console.log('WhatsApp connection closed. Reconnecting...', shouldReconnect);
         if (shouldReconnect) setTimeout(connectToWhatsApp, 3000);
       } else if (connection === 'open') {
         isWaReady = true;
@@ -158,24 +161,27 @@ function requireAdmin(req, res, next) {
   }
 }
 
+// Rate Limiter with proxy support
 const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 60,
+  validate: { xForwardedForHeader: false },
   handler: (req, res) => {
     blockedAttemptsCounter++;
     res.status(429).json({ error: "Rate limit exceeded. Access temporarily blocked." });
   }
 });
 
-// Nodemailer with direct configuration & pooling
+// Production SMTP Connection (Explicit Host & Port)
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
   auth: {
     user: EMAIL_USER,
     pass: EMAIL_PASS
   },
-  pool: true,
-  maxConnections: 3
+  connectionTimeout: 10000
 });
 
 function cleanTarget(id, channel) {
