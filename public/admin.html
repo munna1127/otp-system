@@ -3,215 +3,194 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin Security Center</title>
+  <title>Admin Dashboard & API Docs</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    body { background: #0a0f1d; color: #f8fafc; padding: 20px; min-height: 100vh; }
-    .container { max-width: 900px; margin: 0 auto; }
-    .login-box { max-width: 380px; margin: 80px auto; background: #151f32; padding: 32px; border-radius: 16px; border: 1px solid #23324d; text-align: center; }
-    input { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid #334155; background: #0a0f1d; color: #fff; font-size: 15px; margin-bottom: 14px; outline: none; }
-    button { width: 100%; padding: 12px; background: #6366f1; border: none; border-radius: 8px; color: #fff; font-weight: 600; cursor: pointer; }
-    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
-    .stat-card { background: #151f32; border: 1px solid #23324d; border-radius: 12px; padding: 20px; text-align: center; }
-    .stat-card h3 { font-size: 28px; color: #6366f1; margin-bottom: 4px; }
-    .stat-card p { font-size: 13px; color: #94a3b8; }
-    .wa-card { background: #151f32; border: 1px solid #23324d; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
-    table { width: 100%; border-collapse: collapse; background: #151f32; border-radius: 12px; overflow: hidden; border: 1px solid #23324d; font-size: 14px; }
-    th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid #1f2b42; }
-    th { background: #0f172a; color: #94a3b8; }
-    .badge { padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
-    .badge-email { background: rgba(99,102,241,0.2); color: #818cf8; }
-    .badge-whatsapp { background: rgba(34,197,94,0.2); color: #4ade80; }
-    .badge-telegram { background: rgba(56,189,248,0.2); color: #38bdf8; }
-    .badge-banned { background: rgba(239,68,68,0.2); color: #f87171; }
-    .badge-active { background: rgba(34,197,94,0.2); color: #4ade80; }
-    .btn-action { padding: 6px 12px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; font-size: 12px; }
-    .btn-ban { background: #ef4444; color: #fff; }
-    .btn-unban { background: #10b981; color: #fff; }
-    .btn-logout { background: #334155; padding: 8px 16px; border: none; border-radius: 8px; color: #fff; cursor: pointer; }
-    .code-box { font-size: 26px; font-weight: bold; color: #4ade80; letter-spacing: 4px; background: #0a0f1d; padding: 14px; border-radius: 8px; margin-top: 12px; display: none; text-align: center; border: 1px dashed #4ade80; }
+    body { background: #0b1329; color: #f1f5f9; padding: 24px; }
+    .container { max-width: 1000px; margin: auto; }
+    .card { background: #152238; border: 1px solid #233554; border-radius: 16px; padding: 24px; margin-bottom: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+    h2 { font-size: 20px; margin-bottom: 16px; color: #fff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .stat { background: #0b1329; padding: 18px; border-radius: 12px; border: 1px solid #233554; }
+    .stat-val { font-size: 26px; font-weight: bold; color: #6366f1; }
+    .stat-lbl { color: #94a3b8; font-size: 13px; margin-top: 4px; }
+    input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #334155; background: #0b1329; color: #fff; margin-bottom: 12px; outline: none; }
+    .btn { padding: 12px 20px; background: #6366f1; border: none; border-radius: 8px; color: #fff; font-weight: 600; cursor: pointer; }
+    .btn-danger { background: #ef4444; }
+    .btn-sec { background: #334155; }
+    pre { background: #070c18; padding: 14px; border-radius: 8px; font-size: 13px; color: #38bdf8; overflow-x: auto; margin-top: 10px; }
+    .key-box { display: flex; gap: 10px; align-items: center; background: #0b1329; padding: 12px 16px; border-radius: 8px; border: 1px dashed #6366f1; margin-bottom: 12px; }
+    .key-text { font-family: monospace; font-size: 15px; color: #4ade80; flex: 1; word-break: break-all; }
   </style>
 </head>
 <body>
 
-  <div class="login-box" id="admin-login-box">
-    <div style="font-size: 36px; margin-bottom: 8px;">🔐</div>
-    <h2 style="margin-bottom: 6px;">Admin Access</h2>
-    <p style="color: #94a3b8; font-size: 13px; margin-bottom: 20px;">Enter credentials to open security controls</p>
-    <input type="text" id="admin-user" placeholder="Admin Username" />
-    <input type="password" id="admin-pass" placeholder="Admin Password" />
-    <button onclick="adminLogin()">Authenticate</button>
-    <div id="login-msg" style="margin-top: 10px; color: #f87171; font-size: 13px;"></div>
+<div class="container">
+  <!-- LOGIN VIEW -->
+  <div id="login-sec" class="card" style="max-width: 400px; margin: 80px auto;">
+    <h2>Admin Login</h2>
+    <input type="text" id="adm-user" placeholder="Username" />
+    <input type="password" id="adm-pass" placeholder="Password" />
+    <button class="btn" style="width: 100%;" onclick="adminLogin()">Login</button>
   </div>
 
-  <div class="container" id="admin-dash" style="display: none;">
-    <div class="header">
-      <div>
-        <h1>🛡️ Security Command Center</h1>
-        <p style="color: #94a3b8; font-size: 14px;">Live Threat Shield & Device Link</p>
-      </div>
-      <div>
-        <button class="btn-logout" onclick="adminLogout()">Sign Out Admin</button>
-      </div>
+  <!-- MAIN DASHBOARD -->
+  <div id="dash-sec" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+      <h1>🛡️ Multi-Channel Auth Admin</h1>
+      <button class="btn btn-sec" onclick="logout()">Sign Out</button>
     </div>
 
-    <!-- WhatsApp Link Control Card -->
-    <div class="wa-card">
-      <h3>📲 WhatsApp Bot Device Connection</h3>
-      <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 14px 0;">Bot Connection Status: <span id="wa-status" style="font-weight: bold;">Checking...</span></p>
-      <div style="display: flex; gap: 10px; max-width: 450px;">
-        <input type="text" id="wa-phone" placeholder="919926888306" style="margin-bottom: 0;" />
-        <button onclick="requestPairing()" style="width: auto; white-space: nowrap;">Get Pairing Code</button>
-      </div>
-      <div id="pairing-display" class="code-box"></div>
-    </div>
-
+    <!-- METRICS -->
     <div class="grid">
-      <div class="stat-card"><h3 id="total-users">0</h3><p>Total Registered Users</p></div>
-      <div class="stat-card"><h3 id="active-otps">0</h3><p>Pending OTP Requests</p></div>
-      <div class="stat-card"><h3 id="rate-blocks" style="color: #f87171;">0</h3><p>Blocked Attempts</p></div>
+      <div class="stat"><div class="stat-val" id="m-users">0</div><div class="stat-lbl">Registered Users</div></div>
+      <div class="stat"><div class="stat-val" id="m-otps">0</div><div class="stat-lbl">Active OTPs</div></div>
+      <div class="stat"><div class="stat-val" id="m-blocked">0</div><div class="stat-lbl">Blocked Attacks</div></div>
+      <div class="stat"><div class="stat-val" id="m-wa">Checking...</div><div class="stat-lbl">WhatsApp Status</div></div>
     </div>
 
-    <h3 style="margin-top: 20px;">👥 User Directory</h3>
-    <table>
-      <thead>
-        <tr>
-          <th>Identifier</th>
-          <th>Channel</th>
-          <th>Status</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody id="user-rows">
-        <tr><td colspan="4" style="text-align: center; color: #64748b;">Loading metrics...</td></tr>
-      </tbody>
-    </table>
+    <!-- API KEY & DEVELOPER INTEGRATION -->
+    <div class="card">
+      <h2>🔑 Developer API Management</h2>
+      <p style="color: #94a3b8; font-size: 14px; margin-bottom: 14px;">Use this master API Key to integrate OTP sending and verification into your other apps and websites without paying for third-party services.</p>
+      
+      <div class="key-box">
+        <span class="key-text" id="api-key-val">Loading API Key...</span>
+        <button class="btn btn-sec" onclick="copyApiKey()">Copy</button>
+        <button class="btn btn-danger" onclick="regenApiKey()">Regenerate</button>
+      </div>
+
+      <h3 style="font-size: 15px; margin-top: 20px; color: #fff;">⚡ How to Send OTP from your other projects (Node.js / Fetch):</h3>
+      <pre><code>fetch('https://otp-system-qy3i.onrender.com/api/v1/send-otp', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'x-api-key': '<span class="key-placeholder">YOUR_API_KEY</span>'
+  },
+  body: JSON.stringify({
+    identifier: 'user@example.com', // or '9926888306'
+    channel: 'email'                 // 'email' | 'whatsapp' | 'telegram'
+  })
+});</code></pre>
+
+      <h3 style="font-size: 15px; margin-top: 20px; color: #fff;">✅ How to Verify OTP from your other projects:</h3>
+      <pre><code>fetch('https://otp-system-qy3i.onrender.com/api/v1/verify-otp', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'x-api-key': '<span class="key-placeholder">YOUR_API_KEY</span>'
+  },
+  body: JSON.stringify({
+    identifier: 'user@example.com',
+    otp: '123456'
+  })
+});</code></pre>
+    </div>
+
+    <!-- WHATSAPP LINKING -->
+    <div class="card">
+      <h2>💬 WhatsApp Bot Pairing</h2>
+      <input type="text" id="wa-phone" placeholder="Enter Phone with 91 (e.g. 919926888306)" />
+      <button class="btn" onclick="getPairing()">Generate Pairing Code</button>
+      <div id="pairing-res" style="font-size: 20px; font-weight: bold; color: #4ade80; margin-top: 12px;"></div>
+    </div>
   </div>
+</div>
 
-  <script>
-    window.onload = () => {
-      const token = localStorage.getItem('admin_token');
-      if (token) {
-        document.getElementById('admin-login-box').style.display = 'none';
-        document.getElementById('admin-dash').style.display = 'block';
-        fetchMetrics();
-      }
-    };
+<script>
+  let token = localStorage.getItem('adm_token');
 
-    async function adminLogin() {
-      const username = document.getElementById('admin-user').value.trim();
-      const password = document.getElementById('admin-pass').value.trim();
-      const msg = document.getElementById('login-msg');
+  if (token) showDashboard();
 
-      try {
-        const res = await fetch('/api/admin/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username, password })
-        });
-        const data = await res.json();
-        if (res.ok && data.token) {
-          localStorage.setItem('admin_token', data.token);
-          document.getElementById('admin-login-box').style.display = 'none';
-          document.getElementById('admin-dash').style.display = 'block';
-          fetchMetrics();
-        } else {
-          msg.textContent = data.error || 'Invalid Credentials';
-        }
-      } catch (e) {
-        msg.textContent = 'Server connection error';
-      }
+  async function adminLogin() {
+    const u = document.getElementById('adm-user').value;
+    const p = document.getElementById('adm-pass').value;
+    const res = await fetch('/api/admin/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p })
+    });
+    const d = await res.json();
+    if (res.ok) {
+      token = d.token;
+      localStorage.setItem('adm_token', token);
+      showDashboard();
+    } else {
+      alert(d.error);
     }
+  }
 
-    async function requestPairing() {
-      const phone = document.getElementById('wa-phone').value.trim();
-      const token = localStorage.getItem('admin_token');
-      const box = document.getElementById('pairing-display');
-      if (!phone) return alert('Enter phone number with 91');
+  function showDashboard() {
+    document.getElementById('login-sec').style.display = 'none';
+    document.getElementById('dash-sec').style.display = 'block';
+    loadMetrics();
+    loadApiKey();
+  }
 
-      box.style.display = 'block';
-      box.textContent = 'Generating pairing code...';
-
-      try {
-        const res = await fetch('/api/admin/generate-pairing', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ phone })
-        });
-        const data = await res.json();
-        if (data.success && data.code) {
-          box.innerHTML = `Pairing Code: <span style="color:#38bdf8;">${data.code}</span><br><small style="font-size:12px; color:#94a3b8; font-weight:normal;">Open WhatsApp > Linked Devices > Link with phone number instead</small>`;
-        } else {
-          box.textContent = data.error || 'Error generating code';
-        }
-      } catch (e) {
-        box.textContent = 'Failed to fetch code from server';
-      }
+  async function loadMetrics() {
+    const res = await fetch('/api/admin/metrics', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (res.ok) {
+      const d = await res.json();
+      document.getElementById('m-users').innerText = d.totalUsers;
+      document.getElementById('m-otps').innerText = d.activeOtps;
+      document.getElementById('m-blocked').innerText = d.blockedAttempts;
+      document.getElementById('m-wa').innerText = d.isWaReady ? 'Connected ✅' : 'Disconnected ⚠️';
     }
+  }
 
-    async function fetchMetrics() {
-      const token = localStorage.getItem('admin_token');
-      if (!token) return adminLogout();
-
-      try {
-        const res = await fetch('/api/admin/metrics', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-        const data = await res.json();
-
-        if (res.ok) {
-          document.getElementById('total-users').textContent = data.totalUsers;
-          document.getElementById('active-otps').textContent = data.activeOtps;
-          document.getElementById('rate-blocks').textContent = data.blockedAttempts || 0;
-          
-          const status = document.getElementById('wa-status');
-          status.textContent = data.isWaReady ? '🟢 CONNECTED' : '🔴 NOT CONNECTED (Link below)';
-          status.style.color = data.isWaReady ? '#4ade80' : '#f87171';
-
-          const tbody = document.getElementById('user-rows');
-          tbody.innerHTML = data.users.length === 0 ? '<tr><td colspan="4" style="text-align: center;">No users registered yet</td></tr>' :
-            data.users.map(u => `
-              <tr>
-                <td style="font-weight: 600;">${u.identifier}</td>
-                <td><span class="badge badge-${u.channel}">${u.channel}</span></td>
-                <td><span class="badge ${u.isBanned ? 'badge-banned' : 'badge-active'}">${u.isBanned ? 'BANNED' : 'ACTIVE'}</span></td>
-                <td>
-                  <button class="btn-action ${u.isBanned ? 'btn-unban' : 'btn-ban'}" onclick="toggleBan('${u.identifier}', ${!u.isBanned})">
-                    ${u.isBanned ? 'Unban' : 'Ban User'}
-                  </button>
-                </td>
-              </tr>
-            `).join('');
-        } else {
-          adminLogout();
-        }
-      } catch (e) {
-        console.error(e);
-      }
+  async function loadApiKey() {
+    const res = await fetch('/api/admin/get-key', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const d = await res.json();
+    if (res.ok) {
+      document.getElementById('api-key-val').innerText = d.apiKey;
+      document.querySelectorAll('.key-placeholder').forEach(el => el.innerText = d.apiKey);
     }
+  }
 
-    async function toggleBan(identifier, banStatus) {
-      const token = localStorage.getItem('admin_token');
-      await fetch('/api/admin/toggle-ban', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ identifier, isBanned: banStatus })
-      });
-      fetchMetrics();
+  async function regenApiKey() {
+    if (!confirm('Are you sure you want to regenerate your API Key? Old key will stop working immediately.')) return;
+    const res = await fetch('/api/admin/regenerate-key', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    const d = await res.json();
+    if (res.ok) {
+      document.getElementById('api-key-val').innerText = d.apiKey;
+      document.querySelectorAll('.key-placeholder').forEach(el => el.innerText = d.apiKey);
+      alert('New API Key Generated!');
     }
+  }
 
-    function adminLogout() {
-      localStorage.removeItem('admin_token');
-      location.reload();
+  function copyApiKey() {
+    const key = document.getElementById('api-key-val').innerText;
+    navigator.clipboard.writeText(key);
+    alert('API Key Copied to Clipboard!');
+  }
+
+  async function getPairing() {
+    const p = document.getElementById('wa-phone').value;
+    const res = await fetch('/api/admin/generate-pairing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+      body: JSON.stringify({ phone: p })
+    });
+    const d = await res.json();
+    if (res.ok) {
+      document.getElementById('pairing-res').innerText = 'Pairing Code: ' + d.code;
+    } else {
+      alert(d.error);
     }
+  }
 
-    setInterval(() => {
-      if (localStorage.getItem('admin_token')) fetchMetrics();
-    }, 8000);
-  </script>
+  function logout() {
+    localStorage.removeItem('adm_token');
+    location.reload();
+  }
+</script>
+
 </body>
 </html>

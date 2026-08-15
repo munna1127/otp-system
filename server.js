@@ -18,6 +18,15 @@ app.set('trust proxy', 1);
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+// CORS Setup (Allows your other websites/apps to call this API)
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, x-api-key, Authorization');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 const PORT = process.env.PORT || 5000;
 let waSock = null;
 let isWaReady = false;
@@ -157,6 +166,7 @@ const userSchema = new mongoose.Schema({
   lastLogin: { type: Date, default: Date.now },
   role: { type: String, default: 'Member' },
   isBanned: { type: Boolean, default: false },
+  apiKey: { type: String },
   lastIp: { type: String },
   userAgent: { type: String }
 }, { strict: false });
@@ -220,7 +230,7 @@ async function startTelegramPoller() {
 
         const chatId = msg.chat.id.toString();
 
-        // 1. STRICT CONTACT SHARE (Authentic Phone Linking)
+        // 1. STRICT CONTACT SHARE
         if (msg.contact && msg.contact.phone_number) {
           const v = getPhoneVariants(msg.contact.phone_number);
           await User.findOneAndUpdate(
@@ -237,20 +247,20 @@ async function startTelegramPoller() {
           if (record && record.rawOtp) {
             await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\n🕒 *Valid:* 5 Minutes`);
           } else {
-            await sendTelegramMessage(chatId, `✅ *Verified:* Phone number ${v.last10} is successfully linked!\n\nAb website par apna number dalkar "Send OTP" karein.`);
+            await sendTelegramMessage(chatId, `✅ *Verified:* Phone number ${v.last10} is successfully linked!\n\nAb website par jakar "Send OTP" karein.`);
           }
           continue;
         }
 
-        // 2. /start command -> Provide Contact Share Button
+        // 2. /start command
         if (msg.text && msg.text.startsWith('/start')) {
-          await sendTelegramMessage(chatId, `👋 *Welcome to OTP Master Bot!*\n\n🔐 *Security Verification:* Apna account surakshit tareeqe se link karne ke liye niche di gayi **'📲 Share Phone Number'** button dabayein.`, true);
+          await sendTelegramMessage(chatId, `👋 *Welcome to OTP Master Bot!*\n\n🔐 *Security Verification:* Apna account link karne ke liye niche di gayi **'📲 Share Phone Number'** button dabayein.`, true);
           continue;
         }
 
-        // 3. User typed manual text/number -> Block & Warn
+        // 3. Block manual typing
         if (msg.text) {
-          await sendTelegramMessage(chatId, `⛔ *Security Warning:* Manual number typing allowed nahi hai.\n\nKripya niche di gayi **'📲 Share Phone Number'** button dabakar apna number verify karein.`, true);
+          await sendTelegramMessage(chatId, `⛔ *Security Warning:* Manual number typing allowed nahi hai.\n\nKripya niche di gayi **'📲 Share Phone Number'** button dabakar verify karein.`, true);
         }
       }
     }
@@ -274,9 +284,20 @@ function requireAdmin(req, res, next) {
   }
 }
 
+// Middleware: API Key Authentication for External Projects
+async function requireApiKey(req, res, next) {
+  const apiKey = req.headers['x-api-key'] || req.query.apiKey || req.body.apiKey;
+  if (!apiKey) return res.status(401).json({ success: false, error: "Missing API Key. Provide 'x-api-key' header." });
+
+  const admin = await User.findOne({ apiKey, role: 'Admin' });
+  if (!admin) return res.status(403).json({ success: false, error: "Invalid or revoked API Key." });
+  req.apiKey = apiKey;
+  next();
+}
+
 const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 60,
+  max: 120,
   validate: { xForwardedForHeader: false },
   handler: (req, res) => {
     blockedAttemptsCounter++;
@@ -293,17 +314,182 @@ async function sendBaileysWhatsApp(phone, otp, meta) {
   });
 }
 
+// Core Dispatch Function
+async function dispatchOtpCore(identifier, channel, clientIp, userAgent) {
+  const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
+  const variants = getPhoneVariants(identifier);
+  const target = selectedChannel === 'email' ? identifier.trim() : variants.with91;
+  const rawTarget = identifier.trim();
+
+  const existingUser = await User.findOne({
+    $or: [
+      { identifier: target },
+      { identifier: rawTarget },
+      { identifier: variants.last10 },
+      { identifier: variants.withPlus91 }
+    ]
+  });
+
+  if (existingUser && existingUser.isBanned) {
+    blockedAttemptsCounter++;
+    throw new Error("This account has been banned.");
+  }
+
+  await Otp.deleteMany({
+    $or: [
+      { identifier: target },
+      { identifier: rawTarget },
+      { identifier: variants.last10 },
+      { identifier: variants.withPlus91 }
+    ]
+  });
+
+  const rawOtp = crypto.randomInt(100000, 999999).toString();
+  const salt = await bcrypt.genSalt(10);
+  const otpHash = await bcrypt.hash(rawOtp, salt);
+
+  await Otp.create({ identifier: target, channel: selectedChannel, otpHash, rawOtp });
+
+  console.log(`\n========================================`);
+  console.log(`⚡ OTP: ${rawOtp} | Target: ${target} (${selectedChannel})`);
+  console.log(`========================================`);
+
+  if (selectedChannel === 'email') {
+    const { error } = await resend.emails.send({
+      from: 'onboarding@resend.dev',
+      to: [target],
+      subject: `${rawOtp} is your verification code`,
+      html: `<h2>Your Verification OTP is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes. Do not share this code.</p>`
+    });
+    if (error) throw new Error(error.message);
+  } else if (selectedChannel === 'whatsapp') {
+    await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
+  } else if (selectedChannel === 'telegram') {
+    let destinationChatId = null;
+    if (/^\d{7,11}$/.test(rawTarget) && !rawTarget.startsWith('919') && !rawTarget.startsWith('99') && !rawTarget.startsWith('82')) {
+      destinationChatId = rawTarget;
+    } else if (existingUser && existingUser.telegramChatId) {
+      destinationChatId = existingUser.telegramChatId;
+    }
+
+    if (destinationChatId) {
+      await sendTelegramMessage(destinationChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n📍 *Identifier:* ${target}`);
+    } else {
+      throw new Error("Telegram account is not linked. Open bot @Otp_maaster_bot & click 'Share Phone Number'.");
+    }
+  }
+
+  return { target, selectedChannel };
+}
+
+// Core Verification Function
+async function verifyOtpCore(identifier, otp, clientIp, userAgent) {
+  const variants = getPhoneVariants(identifier);
+  const target = identifier.includes('@') ? identifier.trim() : variants.with91;
+
+  const record = await Otp.findOne({ 
+    $or: [
+      { identifier: target },
+      { identifier: variants.raw },
+      { identifier: variants.last10 },
+      { identifier: variants.withPlus91 }
+    ] 
+  });
+
+  if (!record) return { valid: false, error: "OTP expired or not found" };
+
+  if (record.attempts >= 3) {
+    await Otp.deleteOne({ _id: record._id });
+    blockedAttemptsCounter++;
+    return { valid: false, error: "Max verification attempts exceeded." };
+  }
+
+  const isMatch = await bcrypt.compare(otp.toString().trim(), record.otpHash);
+  if (!isMatch) {
+    record.attempts += 1;
+    await record.save();
+    return { valid: false, error: `Invalid code. ${3 - record.attempts} attempts remaining.` };
+  }
+
+  await Otp.deleteOne({ _id: record._id });
+
+  const user = await User.findOneAndUpdate(
+    { 
+      $or: [
+        { identifier: target },
+        { identifier: variants.raw },
+        { identifier: variants.last10 },
+        { identifier: variants.withPlus91 }
+      ] 
+    },
+    { 
+      $set: { 
+        identifier: target,
+        channel: record.channel, 
+        lastLogin: new Date(), 
+        lastIp: clientIp, 
+        userAgent: userAgent,
+        role: 'Member'
+      } 
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  return { valid: true, user };
+}
+
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
-// --- ADMIN API ---
+// --- ADMIN PANEL ROUTES ---
 app.post('/api/admin/login', (req, res) => {
   const { username, password } = req.body;
   if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
-    const token = jwt.sign({ username, role: 'Admin' }, JWT_SECRET, { expiresIn: '1d' });
+    const token = jwt.sign({ username, role: 'Admin' }, JWT_SECRET, { expiresIn: '7d' });
     return res.status(200).json({ success: true, token });
   }
   res.status(401).json({ error: "Invalid admin credentials" });
+});
+
+app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const activeOtps = await Otp.countDocuments();
+    const users = await User.find().sort({ lastLogin: -1 }).limit(20);
+    res.json({ totalUsers, activeOtps, blockedAttempts: blockedAttemptsCounter, isWaReady, users });
+  } catch (e) {
+    res.status(500).json({ error: "Metrics error" });
+  }
+});
+
+// Admin API Key Management
+app.get('/api/admin/get-key', requireAdmin, async (req, res) => {
+  try {
+    let admin = await User.findOne({ role: 'Admin' });
+    if (!admin) {
+      admin = await User.create({
+        identifier: 'admin',
+        role: 'Admin',
+        apiKey: `otp_live_${crypto.randomBytes(18).toString('hex')}`
+      });
+    } else if (!admin.apiKey) {
+      admin.apiKey = `otp_live_${crypto.randomBytes(18).toString('hex')}`;
+      await admin.save();
+    }
+    res.json({ success: true, apiKey: admin.apiKey });
+  } catch (e) {
+    res.status(500).json({ error: "API Key Error" });
+  }
+});
+
+app.post('/api/admin/regenerate-key', requireAdmin, async (req, res) => {
+  try {
+    const newKey = `otp_live_${crypto.randomBytes(18).toString('hex')}`;
+    await User.findOneAndUpdate({ role: 'Admin' }, { apiKey: newKey }, { upsert: true });
+    res.json({ success: true, apiKey: newKey });
+  } catch (e) {
+    res.status(500).json({ error: "Regeneration Error" });
+  }
 });
 
 app.post('/api/admin/generate-pairing', requireAdmin, async (req, res) => {
@@ -320,17 +506,6 @@ app.post('/api/admin/generate-pairing', requireAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
-  try {
-    const totalUsers = await User.countDocuments();
-    const activeOtps = await Otp.countDocuments();
-    const users = await User.find().sort({ lastLogin: -1 }).limit(20);
-    res.json({ totalUsers, activeOtps, blockedAttempts: blockedAttemptsCounter, isWaReady, users });
-  } catch (e) {
-    res.status(500).json({ error: "Metrics error" });
-  }
-});
-
 app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
   try {
     const { identifier, isBanned } = req.body;
@@ -341,164 +516,99 @@ app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
   }
 });
 
-// --- 1. SEND OTP ROUTE ---
+// --- PUBLIC WEB ROUTES (For your main portal) ---
 app.post('/api/send-otp', otpLimiter, async (req, res) => {
   try {
     const { identifier, channel } = req.body;
     if (!identifier) return res.status(400).json({ error: "Identifier required" });
 
-    const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
-    const variants = getPhoneVariants(identifier);
-    const target = selectedChannel === 'email' ? identifier.trim() : variants.with91;
-    const rawTarget = identifier.trim();
-
-    const existingUser = await User.findOne({
-      $or: [
-        { identifier: target },
-        { identifier: rawTarget },
-        { identifier: variants.last10 },
-        { identifier: variants.withPlus91 }
-      ]
-    });
-
-    if (existingUser && existingUser.isBanned) {
-      blockedAttemptsCounter++;
-      return res.status(403).json({ error: "This account has been banned." });
-    }
-
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    const userAgent = req.headers['user-agent'] || 'Web Portal';
 
-    await Otp.deleteMany({
-      $or: [
-        { identifier: target },
-        { identifier: rawTarget },
-        { identifier: variants.last10 },
-        { identifier: variants.withPlus91 }
-      ]
-    });
-
-    const rawOtp = crypto.randomInt(100000, 999999).toString();
-    const salt = await bcrypt.genSalt(10);
-    const otpHash = await bcrypt.hash(rawOtp, salt);
-
-    await Otp.create({ identifier: target, channel: selectedChannel, otpHash, rawOtp });
-
-    console.log(`\n========================================`);
-    console.log(`⚡ OTP: ${rawOtp} | Target: ${target} (${selectedChannel})`);
-    console.log(`========================================`);
-
-    if (selectedChannel === 'email') {
-      const { data, error } = await resend.emails.send({
-        from: 'onboarding@resend.dev',
-        to: [target],
-        subject: `${rawOtp} is your verification code`,
-        html: `<h2>Your Verification OTP is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes. Do not share this code.</p>`
-      });
-
-      if (error) throw new Error(error.message);
-      console.log('✅ Email Delivered via Resend:', data);
-    } else if (selectedChannel === 'whatsapp') {
-      await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
-    } else if (selectedChannel === 'telegram') {
-      // Find destination Chat ID strictly from verified database records
-      let destinationChatId = null;
-
-      if (/^\d{7,11}$/.test(rawTarget) && !rawTarget.startsWith('919') && !rawTarget.startsWith('99') && !rawTarget.startsWith('82')) {
-        destinationChatId = rawTarget;
-      } else if (existingUser && existingUser.telegramChatId) {
-        destinationChatId = existingUser.telegramChatId;
-      }
-
-      if (destinationChatId) {
-        await sendTelegramMessage(destinationChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n📍 *Identifier:* ${target}`);
-      } else {
-        return res.status(400).json({ 
-          error: "Telegram account link nahi hai. Pehle bot me jakar 'Share Phone Number' dabayein." 
-        });
-      }
-    }
-
-    res.status(200).json({
-      success: true,
-      message: `OTP sent via ${selectedChannel.toUpperCase()}`
-    });
+    const result = await dispatchOtpCore(identifier, channel, clientIp, userAgent);
+    res.status(200).json({ success: true, message: `OTP sent via ${result.selectedChannel.toUpperCase()}` });
   } catch (error) {
-    console.error("Send Error:", error);
     res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
   }
 });
 
-// --- 2. VERIFY OTP ROUTE ---
 app.post('/api/verify-otp', async (req, res) => {
   try {
     const { identifier, otp } = req.body;
     if (!identifier || !otp) return res.status(400).json({ error: "Missing fields" });
 
-    const variants = getPhoneVariants(identifier);
-    const target = identifier.includes('@') ? identifier.trim() : variants.with91;
-
-    const record = await Otp.findOne({ 
-      $or: [
-        { identifier: target },
-        { identifier: variants.raw },
-        { identifier: variants.last10 },
-        { identifier: variants.withPlus91 }
-      ] 
-    });
-
-    if (!record) return res.status(400).json({ error: "OTP expired or not found" });
-
-    if (record.attempts >= 3) {
-      await Otp.deleteOne({ _id: record._id });
-      blockedAttemptsCounter++;
-      return res.status(429).json({ error: "Max attempts exceeded." });
-    }
-
-    const isMatch = await bcrypt.compare(otp.toString().trim(), record.otpHash);
-    if (!isMatch) {
-      record.attempts += 1;
-      await record.save();
-      return res.status(400).json({ error: `Invalid code. ${3 - record.attempts} attempts left.` });
-    }
-
-    await Otp.deleteOne({ _id: record._id });
-
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+    const userAgent = req.headers['user-agent'] || 'Web Portal';
 
-    const user = await User.findOneAndUpdate(
-      { 
-        $or: [
-          { identifier: target },
-          { identifier: variants.raw },
-          { identifier: variants.last10 },
-          { identifier: variants.withPlus91 }
-        ] 
-      },
-      { 
-        $set: { 
-          identifier: target,
-          channel: record.channel, 
-          lastLogin: new Date(), 
-          lastIp: clientIp, 
-          userAgent: userAgent,
-          role: 'Member'
-        } 
-      },
-      { upsert: true, returnDocument: 'after' }
-    );
+    const result = await verifyOtpCore(identifier, otp, clientIp, userAgent);
+    if (!result.valid) return res.status(400).json({ error: result.error });
 
     const token = jwt.sign(
-      { id: user._id, identifier: user.identifier, role: user.role || 'Member' },
+      { id: result.user._id, identifier: result.user.identifier, role: result.user.role || 'Member' },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    res.status(200).json({ success: true, token, user });
+    res.status(200).json({ success: true, token, user: result.user });
   } catch (error) {
-    console.error("Verification Error:", error);
     res.status(500).json({ error: "Server verification error" });
+  }
+});
+
+// =========================================================================
+// --- EXTERNAL REST API V1 (For Your Other Web/Mobile/Backend Projects) ---
+// =========================================================================
+
+// 1. External API to Send OTP
+app.post('/api/v1/send-otp', requireApiKey, async (req, res) => {
+  try {
+    const { identifier, channel } = req.body;
+    if (!identifier || !channel) {
+      return res.status(400).json({ success: false, error: "Missing parameters: 'identifier' and 'channel' (email|whatsapp|telegram) required." });
+    }
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'External API';
+    const userAgent = req.headers['user-agent'] || 'REST API Client';
+
+    const result = await dispatchOtpCore(identifier, channel, clientIp, userAgent);
+    res.status(200).json({
+      success: true,
+      message: `OTP dispatched to ${result.target} via ${result.selectedChannel}`,
+      target: result.target,
+      channel: result.selectedChannel
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 2. External API to Verify OTP
+app.post('/api/v1/verify-otp', requireApiKey, async (req, res) => {
+  try {
+    const { identifier, otp } = req.body;
+    if (!identifier || !otp) {
+      return res.status(400).json({ success: false, error: "Missing parameters: 'identifier' and 'otp' required." });
+    }
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'External API';
+    const userAgent = req.headers['user-agent'] || 'REST API Client';
+
+    const result = await verifyOtpCore(identifier, otp, clientIp, userAgent);
+    if (!result.valid) {
+      return res.status(400).json({ success: false, error: result.error });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "OTP successfully verified.",
+      user: {
+        identifier: result.user.identifier,
+        channel: result.user.channel,
+        role: result.user.role
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: "Verification server error" });
   }
 });
 
