@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Omni-Channel OTP Auth</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: #0b0f19; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+    .card { background: #161f30; padding: 32px 24px; border-radius: 18px; width: 100%; max-width: 420px; border: 1px solid #243048; box-shadow: 0 20px 40px -15px rgba(0,0,0,0.6); }
+    h2 { font-size: 22px; font-weight: 700; margin-bottom: 6px; text-align: center; }
+    p.sub { font-size: 14px; color: #94a3b8; text-align: center; margin-bottom: 20px; }
+    
+    .tabs { display: flex; background: #0b0f19; padding: 4px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #243048; gap: 4px; }
+    .tab { flex: 1; text-align: center; padding: 8px 4px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; color: #94a3b8; transition: 0.2s; white-space: nowrap; }
+    .tab.active { background: #6366f1; color: #fff; }
+
+    input[type="text"] { width: 100%; padding: 14px 16px; border-radius: 10px; border: 1px solid #334155; background: #0b0f19; color: #fff; font-size: 15px; outline: none; }
+    .otp-inputs { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 20px; }
+    .otp-inputs input { width: 48px; height: 54px; text-align: center; font-size: 22px; font-weight: bold; border-radius: 10px; border: 1px solid #334155; background: #0b0f19; color: #fff; outline: none; }
+    button { width: 100%; padding: 14px; background: #6366f1; border: none; border-radius: 10px; color: #fff; font-weight: 600; font-size: 15px; cursor: pointer; }
+    button:disabled { background: #334155; cursor: not-allowed; }
+    .msg { margin-top: 15px; font-size: 13px; text-align: center; padding: 10px; border-radius: 8px; display: none; }
+    .error { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+    .success { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+    .resend-box { margin-top: 18px; text-align: center; font-size: 13px; color: #94a3b8; }
+    .profile-card { background: #0b0f19; border-radius: 12px; padding: 16px; margin: 20px 0; border: 1px solid #243048; text-align: left; }
+    .profile-card p { font-size: 13px; color: #94a3b8; margin-bottom: 6px; }
+    .profile-card span { color: #fff; font-weight: 500; font-family: monospace; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+  <div class="card" id="input-step">
+    <h2>Multi-Channel Auth</h2>
+    <p class="sub">Choose where you want your verification OTP</p>
+    
+    <div class="tabs">
+      <div class="tab active" id="tab-email" onclick="switchChannel('email')">✉️ Email</div>
+      <div class="tab" id="tab-telegram" onclick="switchChannel('telegram')">✈️ Telegram</div>
+      <div class="tab" id="tab-whatsapp" onclick="switchChannel('whatsapp')">💬 WhatsApp</div>
+    </div>
+
+    <div style="margin-bottom: 18px;">
+      <input type="text" id="user-input" placeholder="youremail@gmail.com" />
+    </div>
+
+    <button id="send-btn" onclick="sendOtp()">Send OTP</button>
+    <div id="input-msg" class="msg"></div>
+  </div>
+
+  <div class="card" id="otp-step" style="display: none;">
+    <h2>Verification Code</h2>
+    <p class="sub" id="otp-target">We sent a 6-digit code</p>
+    
+    <div class="otp-inputs" id="otp-container">
+      <input type="text" maxlength="1" inputmode="numeric" />
+      <input type="text" maxlength="1" inputmode="numeric" />
+      <input type="text" maxlength="1" inputmode="numeric" />
+      <input type="text" maxlength="1" inputmode="numeric" />
+      <input type="text" maxlength="1" inputmode="numeric" />
+      <input type="text" maxlength="1" inputmode="numeric" />
+    </div>
+
+    <button id="verify-btn" onclick="verifyOtp()">Verify Code</button>
+    <div class="resend-box" id="timer-box">Resend in <span id="time-left">30</span>s</div>
+    <div id="otp-msg" class="msg"></div>
+  </div>
+
+  <div class="card" id="dash-step" style="display: none; text-align: center;">
+    <div style="font-size: 40px; margin-bottom: 10px;">🛡️</div>
+    <h2>Dashboard</h2>
+    <p class="sub">Authenticated Session</p>
+
+    <div class="profile-card">
+      <p>Identifier: <br><span id="dash-identifier">-</span></p>
+      <p>Channel: <br><span id="dash-channel" style="color: #4ade80;">-</span></p>
+      <p>User ID: <br><span id="dash-id">-</span></p>
+    </div>
+
+    <button style="background: #ef4444;" onclick="logout()">Sign Out</button>
+  </div>
+
+  <script>
+    let currentChannel = 'email';
+    let currentIdentifier = '';
+    let timerInterval;
+
+    function switchChannel(channel) {
+      currentChannel = channel;
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.getElementById('tab-' + channel).classList.add('active');
+      
+      const input = document.getElementById('user-input');
+      if (channel === 'email') input.placeholder = 'youremail@gmail.com';
+      else if (channel === 'telegram') input.placeholder = 'Telegram Chat ID (e.g. 583920192)';
+      else if (channel === 'whatsapp') input.placeholder = '10-Digit WhatsApp No (e.g. 9926888306)';
+    }
+
+    function showMsg(id, text, isErr = false) {
+      const el = document.getElementById(id);
+      el.textContent = text;
+      el.className = 'msg ' + (isErr ? 'error' : 'success');
+      el.style.display = 'block';
+    }
+
+    async function sendOtp() {
+      const identifier = document.getElementById('user-input').value.trim();
+      if (!identifier) return showMsg('input-msg', 'Please enter identifier', true);
+
+      const btn = document.getElementById('send-btn');
+      btn.disabled = true;
+      btn.textContent = 'Sending...';
+
+      try {
+        const res = await fetch('/api/send-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier, channel: currentChannel })
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          currentIdentifier = identifier;
+          document.getElementById('input-step').style.display = 'none';
+          document.getElementById('otp-step').style.display = 'block';
+          document.getElementById('otp-target').textContent = `Code sent to ${identifier}`;
+          setupOtpInputs();
+          startTimer(30);
+        } else {
+          showMsg('input-msg', data.error || data.message, true);
+        }
+      } catch (err) {
+        showMsg('input-msg', 'Network failed', true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Send OTP';
+      }
+    }
+
+    function setupOtpInputs() {
+      const inputs = document.querySelectorAll('.otp-inputs input');
+      inputs[0].focus();
+      inputs.forEach((input, index) => {
+        input.value = '';
+        input.oninput = () => {
+          if (input.value && index < inputs.length - 1) inputs[index + 1].focus();
+          const fullOtp = Array.from(inputs).map(i => i.value).join('');
+          if (fullOtp.length === 6) verifyOtp();
+        };
+        input.onkeydown = (e) => {
+          if (e.key === 'Backspace' && !input.value && index > 0) inputs[index - 1].focus();
+        };
+      });
+    }
+
+    async function verifyOtp() {
+      const inputs = document.querySelectorAll('.otp-inputs input');
+      const otp = Array.from(inputs).map(i => i.value).join('');
+      if (otp.length < 6) return showMsg('otp-msg', 'Enter all 6 digits', true);
+
+      const btn = document.getElementById('verify-btn');
+      btn.disabled = true;
+
+      try {
+        const res = await fetch('/api/verify-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ identifier: currentIdentifier, otp })
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+          localStorage.setItem('auth_token', data.token);
+          document.getElementById('otp-step').style.display = 'none';
+          document.getElementById('dash-step').style.display = 'block';
+          document.getElementById('dash-identifier').textContent = data.user.identifier;
+          document.getElementById('dash-channel').textContent = data.user.channel.toUpperCase();
+          document.getElementById('dash-id').textContent = data.user._id;
+        } else {
+          showMsg('otp-msg', data.error || 'Invalid OTP', true);
+        }
+      } catch (err) {
+        showMsg('otp-msg', 'Error connecting', true);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function startTimer(seconds) {
+      clearInterval(timerInterval);
+      const box = document.getElementById('timer-box');
+      timerInterval = setInterval(() => {
+        if (seconds <= 0) {
+          clearInterval(timerInterval);
+          box.innerHTML = `<span onclick="sendOtp()" style="color:#818cf8; cursor:pointer; font-weight:600;">Resend OTP</span>`;
+        } else {
+          box.innerHTML = `Resend in <span>${seconds}s</span>`;
+          seconds--;
+        }
+      }, 1000);
+    }
+
+    function logout() {
+      localStorage.removeItem('auth_token');
+      location.reload();
+    }
+  </script>
+</body>
+</html>
