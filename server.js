@@ -150,7 +150,7 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// Telegram Polling Engine (Listens for bot /start with Phone deep-link)
+// SMART TELEGRAM POLLER ENGINE
 let lastUpdateId = 0;
 async function startTelegramPoller() {
   if (!TELEGRAM_BOT_TOKEN || TELEGRAM_BOT_TOKEN === 'YOUR_TELEGRAM_BOT_TOKEN') return;
@@ -164,43 +164,95 @@ async function startTelegramPoller() {
       for (const update of data.result) {
         lastUpdateId = update.update_id;
         const msg = update.message;
-        if (!msg || !msg.text) continue;
+        if (!msg) continue;
 
         const chatId = msg.chat.id;
+
+        // 1. If user shared contact button
+        if (msg.contact && msg.contact.phone_number) {
+          const rawPhone = msg.contact.phone_number;
+          const cleanPhone = cleanTarget(rawPhone, 'telegram');
+          await User.findOneAndUpdate({ identifier: cleanPhone }, { telegramChatId: chatId.toString() }, { upsert: true });
+
+          const record = await Otp.findOne({ identifier: cleanPhone, channel: 'telegram' }).sort({ createdAt: -1 });
+          if (record && record.rawOtp) {
+            await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\nValid for 5 Minutes.`);
+          } else {
+            await sendTelegramMessage(chatId, `✅ Phone linked! Next time you request an OTP on the portal, it will be delivered directly here.`);
+          }
+          continue;
+        }
+
+        if (!msg.text) continue;
         const text = msg.text.trim();
 
         if (text.startsWith('/start')) {
           const parts = text.split(' ');
-          const payload = parts[1]; // Phone Number or Chat ID Identifier
+          const payload = parts[1]; // Payload if deep linked
+
+          let targetOtpRecord = null;
 
           if (payload) {
             const cleanTargetId = cleanTarget(payload, 'telegram');
-            const record = await Otp.findOne({ 
+            targetOtpRecord = await Otp.findOne({
               $or: [{ identifier: cleanTargetId }, { identifier: payload }],
-              channel: 'telegram' 
-            });
+              channel: 'telegram'
+            }).sort({ createdAt: -1 });
 
-            if (record && record.rawOtp) {
-              await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\nValid for 5 Minutes.`);
+            if (targetOtpRecord) {
               await User.findOneAndUpdate({ identifier: cleanTargetId }, { telegramChatId: chatId.toString() }, { upsert: true });
-            } else {
-              await sendTelegramMessage(chatId, `⚠️ No active OTP request found. Please enter your Phone/Chat ID on the portal first.`);
             }
+          }
+
+          // Fallback: If no payload, find latest active OTP requested for telegram within 5 min
+          if (!targetOtpRecord) {
+            targetOtpRecord = await Otp.findOne({ channel: 'telegram' }).sort({ createdAt: -1 });
+          }
+
+          if (targetOtpRecord && targetOtpRecord.rawOtp) {
+            await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${targetOtpRecord.rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n🌐 *Destination:* \`${targetOtpRecord.identifier}\``);
+            await User.findOneAndUpdate({ identifier: targetOtpRecord.identifier }, { telegramChatId: chatId.toString() }, { upsert: true });
           } else {
-            await sendTelegramMessage(chatId, `👋 Your Telegram Chat ID is: \`${chatId}\`\n\nYou can use this Chat ID or your Phone Number on our portal to receive OTPs.`);
+            await sendTelegramMessage(chatId, `👋 Your Telegram Chat ID is: \`${chatId}\`\n\nTo receive OTPs, you can enter this Chat ID directly on the website, or click the Share Contact button below:`, true);
           }
         }
       }
     }
   } catch (e) {}
 
-  setTimeout(startTelegramPoller, 1200);
+  setTimeout(startTelegramPoller, 1000);
 }
 
-function sendTelegramMessage(chatId, text) {
+function sendTelegramMessage(chatId, text, showContactBtn = false) {
   return new Promise((resolve) => {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage?chat_id=${chatId}&text=${encodeURIComponent(text)}&parse_mode=Markdown`;
-    require('https').get(url, () => resolve(true)).on('error', () => resolve(false));
+    let body = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown'
+    };
+
+    if (showContactBtn) {
+      body.reply_markup = {
+        keyboard: [[{ text: "📲 Share Phone Number", request_contact: true }]],
+        resize_keyboard: true,
+        one_time_keyboard: true
+      };
+    }
+
+    const postData = JSON.stringify(body);
+    const req = require('https').request({
+      hostname: 'api.telegram.org',
+      path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData)
+      }
+    }, () => resolve(true));
+
+    req.on('error', () => resolve(false));
+    req.write(postData);
+    req.end();
   });
 }
 
@@ -230,15 +282,10 @@ const otpLimiter = rateLimit({
 });
 
 function cleanTarget(id, channel) {
-  if (channel === 'whatsapp') {
+  if (channel === 'whatsapp' || channel === 'telegram') {
     const digits = id.replace(/\D/g, '');
-    return digits.length === 10 ? `91${digits}` : digits;
-  }
-  if (channel === 'telegram') {
-    const digits = id.replace(/\D/g, '');
-    // If it's a 10 digit Indian mobile number
     if (digits.length === 10) return `91${digits}`;
-    return id.trim();
+    return digits.length > 0 ? digits : id.trim();
   }
   return id.trim();
 }
@@ -309,7 +356,10 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
     const target = cleanTarget(identifier, selectedChannel);
 
-    const existingUser = await User.findOne({ identifier: target });
+    const existingUser = await User.findOne({
+      $or: [{ identifier: target }, { identifier: identifier.trim() }]
+    });
+
     if (existingUser && existingUser.isBanned) {
       blockedAttemptsCounter++;
       return res.status(403).json({ error: "This account has been banned." });
@@ -318,7 +368,9 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
     const userAgent = req.headers['user-agent'] || 'Unknown Device';
 
-    await Otp.deleteMany({ identifier: target });
+    await Otp.deleteMany({
+      $or: [{ identifier: target }, { identifier: identifier.trim() }]
+    });
 
     const rawOtp = crypto.randomInt(100000, 999999).toString();
     const salt = await bcrypt.genSalt(10);
@@ -345,7 +397,6 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
     } else if (selectedChannel === 'telegram') {
-      // Check if target is a direct numerical Chat ID (usually 8-10 digits without leading 91)
       const isDirectChatId = /^\d{7,10}$/.test(identifier.trim());
 
       if (isDirectChatId) {
