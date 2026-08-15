@@ -6,7 +6,6 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const path = require('path');
-const readline = require('readline');
 const rateLimit = require('express-rate-limit');
 const Otp = require('./models/Otp');
 
@@ -17,11 +16,12 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
+const PORT = process.env.PORT || 5000;
 let waSock = null;
 let isWaReady = false;
 let blockedAttemptsCounter = 0;
 
-// WhatsApp Connection
+// WhatsApp Engine
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
   const { version } = await fetchLatestBaileysVersion();
@@ -34,22 +34,6 @@ async function connectToWhatsApp() {
     browser: ["Ubuntu", "Chrome", "20.0.04"]
   });
 
-  if (!waSock.authState.creds.registered) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    setTimeout(async () => {
-      try {
-        rl.question('\n📱 Enter WhatsApp Phone Number (e.g. 919926888306): ', async (phone) => {
-          rl.close();
-          const cleanPhone = phone.replace(/\D/g, '');
-          const code = await waSock.requestPairingCode(cleanPhone);
-          console.log(`\n🔗 PAIRING CODE: \x1b[1m\x1b[32m${code}\x1b[0m\n`);
-        });
-      } catch (err) {
-        console.error(err);
-      }
-    }, 3000);
-  }
-
   waSock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect } = update;
     if (connection === 'close') {
@@ -58,7 +42,7 @@ async function connectToWhatsApp() {
       if (shouldReconnect) connectToWhatsApp();
     } else if (connection === 'open') {
       isWaReady = true;
-      console.log('\n✅ [WHATSAPP READY] Self-Hosted WhatsApp Connected!\n');
+      console.log('✅ [WHATSAPP READY] Self-Hosted WhatsApp Connected Successfully!');
     }
   });
 
@@ -67,7 +51,7 @@ async function connectToWhatsApp() {
 
 connectToWhatsApp();
 
-// User Schema with Ban status
+// User Schema
 const userSchema = new mongoose.Schema({
   identifier: { type: String, required: true, unique: true },
   channel: { type: String, enum: ['email', 'telegram', 'whatsapp'], default: 'email' },
@@ -84,7 +68,6 @@ const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
 
-// Admin Authentication Middleware
 function requireAdmin(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -126,7 +109,7 @@ function cleanTarget(id, channel) {
 }
 
 async function sendBaileysWhatsApp(phone, otp, meta) {
-  if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is initializing...');
+  if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is not linked. Open /admin to generate Pairing Code.');
   const jid = `${phone}@s.whatsapp.net`;
 
   await waSock.sendMessage(jid, {
@@ -142,7 +125,6 @@ function sendTelegramOTP(chatId, otp) {
   });
 }
 
-// Static HTML Delivery
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
@@ -153,33 +135,48 @@ app.post('/api/admin/login', (req, res) => {
     const token = jwt.sign({ username, role: 'Admin' }, JWT_SECRET, { expiresIn: '1d' });
     return res.status(200).json({ success: true, token });
   }
-  res.status(401).json({ error: "Invalid admin username or password" });
+  res.status(401).json({ error: "Invalid admin credentials" });
 });
 
-// --- ADMIN METRICS API (PROTECTED) ---
+// --- ADMIN GENERATE PAIRING CODE API ---
+app.post('/api/admin/generate-pairing', requireAdmin, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: "Phone number required" });
+    if (!waSock) return res.status(503).json({ error: "WhatsApp engine initializing" });
+
+    const cleanPhone = phone.replace(/\D/g, '');
+    const code = await waSock.requestPairingCode(cleanPhone);
+    res.json({ success: true, code });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to generate pairing code" });
+  }
+});
+
+// --- ADMIN STATUS & METRICS API ---
 app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
   try {
     const totalUsers = await User.countDocuments();
     const activeOtps = await Otp.countDocuments();
     const users = await User.find().sort({ lastLogin: -1 }).limit(20);
-    res.json({ totalUsers, activeOtps, blockedAttempts: blockedAttemptsCounter, users });
+    res.json({ totalUsers, activeOtps, blockedAttempts: blockedAttemptsCounter, isWaReady, users });
   } catch (e) {
     res.status(500).json({ error: "Metrics error" });
   }
 });
 
-// --- ADMIN BAN / UNBAN API (PROTECTED) ---
+// --- ADMIN BAN / UNBAN API ---
 app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
   try {
     const { identifier, isBanned } = req.body;
     await User.findOneAndUpdate({ identifier }, { isBanned: Boolean(isBanned) });
-    res.json({ success: true, message: `User status updated to ${isBanned ? 'Banned' : 'Active'}` });
+    res.json({ success: true, message: `User status updated` });
   } catch (e) {
     res.status(500).json({ error: "Action failed" });
   }
 });
 
-// --- 1. SEND OTP ROUTE (Checks Ban Status) ---
+// --- 1. SEND OTP ROUTE ---
 app.post('/api/send-otp', otpLimiter, async (req, res) => {
   try {
     const { identifier, channel } = req.body;
@@ -188,11 +185,10 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
     const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
     const target = cleanTarget(identifier, selectedChannel);
 
-    // Check if banned
     const existingUser = await User.findOne({ identifier: target });
     if (existingUser && existingUser.isBanned) {
       blockedAttemptsCounter++;
-      return res.status(403).json({ error: "This account has been banned by Administrator." });
+      return res.status(403).json({ error: "This account has been banned." });
     }
 
     const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
@@ -225,8 +221,8 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
 
     res.status(200).json({ success: true, message: `OTP sent via ${selectedChannel.toUpperCase()}` });
   } catch (error) {
-    console.error("Send Error:", error);
-    res.status(500).json({ error: "Failed to dispatch OTP" });
+    console.error("Send Error:", error.message || error);
+    res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
   }
 });
 
@@ -294,25 +290,13 @@ app.post('/api/verify-otp', async (req, res) => {
   }
 });
 
-// --- PROTECTED USER DATA ROUTE ---
-app.get('/api/user-data', async (req, res) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-  if (!token) return res.status(401).json({ error: "Unauthorized" });
-
-  try {
-    const verified = jwt.verify(token, JWT_SECRET);
-    const user = await User.findOne({ identifier: verified.identifier });
-    if (user && user.isBanned) return res.status(403).json({ error: "Account banned" });
-    res.json({ success: true, user });
-  } catch (err) {
-    res.status(403).json({ error: "Invalid token" });
-  }
-});
-
+// Auto-Drop Legacy Duplicate Indexes on Startup
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => {
+  .then(async () => {
     console.log("MongoDB Connected!");
-    app.listen(5000, () => console.log("Server running on http://localhost:5000"));
+    try {
+      await mongoose.connection.collection('users').dropIndex('email_1');
+    } catch (e) {}
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   })
   .catch(err => console.error(err));

@@ -8,21 +8,16 @@
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
     body { background: #0a0f1d; color: #f8fafc; padding: 20px; min-height: 100vh; }
     .container { max-width: 900px; margin: 0 auto; }
-    
-    /* Login Modal */
-    .login-box { max-width: 380px; margin: 80px auto; background: #151f32; padding: 32px; border-radius: 16px; border: 1px solid #23324d; box-shadow: 0 20px 40px rgba(0,0,0,0.6); text-align: center; }
+    .login-box { max-width: 380px; margin: 80px auto; background: #151f32; padding: 32px; border-radius: 16px; border: 1px solid #23324d; text-align: center; }
     input { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid #334155; background: #0a0f1d; color: #fff; font-size: 15px; margin-bottom: 14px; outline: none; }
-    input:focus { border-color: #6366f1; }
     button { width: 100%; padding: 12px; background: #6366f1; border: none; border-radius: 8px; color: #fff; font-weight: 600; cursor: pointer; }
-    
-    /* Dashboard Area */
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
     .stat-card { background: #151f32; border: 1px solid #23324d; border-radius: 12px; padding: 20px; text-align: center; }
     .stat-card h3 { font-size: 28px; color: #6366f1; margin-bottom: 4px; }
     .stat-card p { font-size: 13px; color: #94a3b8; }
-    
-    table { width: 100%; border-collapse: collapse; background: #151f32; border-radius: 12px; overflow: hidden; border: 1px solid #23324d; font-size: 14px; margin-top: 14px; }
+    .wa-card { background: #151f32; border: 1px solid #23324d; border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+    table { width: 100%; border-collapse: collapse; background: #151f32; border-radius: 12px; overflow: hidden; border: 1px solid #23324d; font-size: 14px; }
     th, td { padding: 14px 16px; text-align: left; border-bottom: 1px solid #1f2b42; }
     th { background: #0f172a; color: #94a3b8; }
     .badge { padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; }
@@ -31,17 +26,15 @@
     .badge-telegram { background: rgba(56,189,248,0.2); color: #38bdf8; }
     .badge-banned { background: rgba(239,68,68,0.2); color: #f87171; }
     .badge-active { background: rgba(34,197,94,0.2); color: #4ade80; }
-    
     .btn-action { padding: 6px 12px; border-radius: 6px; border: none; font-weight: 600; cursor: pointer; font-size: 12px; }
     .btn-ban { background: #ef4444; color: #fff; }
     .btn-unban { background: #10b981; color: #fff; }
     .btn-logout { background: #334155; padding: 8px 16px; border: none; border-radius: 8px; color: #fff; cursor: pointer; }
-    .msg { margin-top: 12px; font-size: 13px; color: #f87171; }
+    .code-box { font-size: 24px; font-weight: bold; color: #4ade80; letter-spacing: 4px; background: #0a0f1d; padding: 12px; border-radius: 8px; margin-top: 10px; display: none; text-align: center; }
   </style>
 </head>
 <body>
 
-  <!-- ADMIN LOGIN SCREEN -->
   <div class="login-box" id="admin-login-box">
     <div style="font-size: 36px; margin-bottom: 8px;">🔐</div>
     <h2 style="margin-bottom: 6px;">Admin Access</h2>
@@ -49,19 +42,29 @@
     <input type="text" id="admin-user" placeholder="Admin Username" />
     <input type="password" id="admin-pass" placeholder="Admin Password" />
     <button onclick="adminLogin()">Authenticate</button>
-    <div id="login-msg" class="msg"></div>
+    <div id="login-msg" style="margin-top: 10px; color: #f87171; font-size: 13px;"></div>
   </div>
 
-  <!-- PROTECTED DASHBOARD SCREEN -->
   <div class="container" id="admin-dash" style="display: none;">
     <div class="header">
       <div>
         <h1>🛡️ Security Command Center</h1>
-        <p style="color: #94a3b8; font-size: 14px;">Live Threat Shield & User Management</p>
+        <p style="color: #94a3b8; font-size: 14px;">Live Threat Shield & Device Link</p>
       </div>
       <div>
         <button class="btn-logout" onclick="adminLogout()">Sign Out Admin</button>
       </div>
+    </div>
+
+    <!-- WhatsApp Link Control Card -->
+    <div class="wa-card">
+      <h3>📲 WhatsApp Bot Connection</h3>
+      <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 14px 0;">Status: <span id="wa-status" style="font-weight: bold;">Checking...</span></p>
+      <div style="display: flex; gap: 10px; max-width: 450px;">
+        <input type="text" id="wa-phone" placeholder="919926888306" style="margin-bottom: 0;" />
+        <button onclick="requestPairing()" style="width: auto; white-space: nowrap;">Get Pairing Code</button>
+      </div>
+      <div id="pairing-display" class="code-box"></div>
     </div>
 
     <div class="grid">
@@ -70,19 +73,18 @@
       <div class="stat-card"><h3 id="rate-blocks" style="color: #f87171;">0</h3><p>Blocked Attempts</p></div>
     </div>
 
-    <h3 style="margin-top: 20px;">👥 User Directory & Access Control</h3>
+    <h3 style="margin-top: 20px;">👥 User Directory</h3>
     <table>
       <thead>
         <tr>
           <th>Identifier</th>
           <th>Channel</th>
           <th>Status</th>
-          <th>Last IP / Device</th>
           <th>Action</th>
         </tr>
       </thead>
       <tbody id="user-rows">
-        <tr><td colspan="5" style="text-align: center; color: #64748b;">Loading metrics...</td></tr>
+        <tr><td colspan="4" style="text-align: center; color: #64748b;">Loading metrics...</td></tr>
       </tbody>
     </table>
   </div>
@@ -102,11 +104,6 @@
       const password = document.getElementById('admin-pass').value.trim();
       const msg = document.getElementById('login-msg');
 
-      if (!username || !password) {
-        msg.textContent = 'Please enter username and password';
-        return;
-      }
-
       try {
         const res = await fetch('/api/admin/login', {
           method: 'POST',
@@ -114,17 +111,45 @@
           body: JSON.stringify({ username, password })
         });
         const data = await res.json();
-
         if (res.ok && data.token) {
           localStorage.setItem('admin_token', data.token);
           document.getElementById('admin-login-box').style.display = 'none';
           document.getElementById('admin-dash').style.display = 'block';
           fetchMetrics();
         } else {
-          msg.textContent = data.error || 'Invalid Admin Credentials';
+          msg.textContent = data.error || 'Invalid Credentials';
         }
       } catch (e) {
-        msg.textContent = 'Server error during login';
+        msg.textContent = 'Server connection error';
+      }
+    }
+
+    async function requestPairing() {
+      const phone = document.getElementById('wa-phone').value.trim();
+      const token = localStorage.getItem('admin_token');
+      const box = document.getElementById('pairing-display');
+      if (!phone) return alert('Enter phone number with 91');
+
+      box.style.display = 'block';
+      box.textContent = 'Generating...';
+
+      try {
+        const res = await fetch('/api/admin/generate-pairing', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({ phone })
+        });
+        const data = await res.json();
+        if (data.success && data.code) {
+          box.textContent = data.code;
+        } else {
+          box.textContent = data.error || 'Error getting code';
+        }
+      } catch (e) {
+        box.textContent = 'Failed to fetch code';
       }
     }
 
@@ -142,26 +167,25 @@
           document.getElementById('total-users').textContent = data.totalUsers;
           document.getElementById('active-otps').textContent = data.activeOtps;
           document.getElementById('rate-blocks').textContent = data.blockedAttempts || 0;
+          
+          const status = document.getElementById('wa-status');
+          status.textContent = data.isWaReady ? '🟢 CONNECTED' : '🔴 NOT CONNECTED';
+          status.style.color = data.isWaReady ? '#4ade80' : '#f87171';
 
           const tbody = document.getElementById('user-rows');
-          if (data.users.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" style="text-align: center;">No users registered yet</td></tr>';
-            return;
-          }
-
-          tbody.innerHTML = data.users.map(u => `
-            <tr>
-              <td style="font-weight: 600;">${u.identifier}</td>
-              <td><span class="badge badge-${u.channel}">${u.channel}</span></td>
-              <td><span class="badge ${u.isBanned ? 'badge-banned' : 'badge-active'}">${u.isBanned ? 'BANNED' : 'ACTIVE'}</span></td>
-              <td style="color: #94a3b8; font-size: 12px;">${u.lastIp || 'N/A'}<br>${u.userAgent ? u.userAgent.slice(0, 30) + '...' : ''}</td>
-              <td>
-                <button class="btn-action ${u.isBanned ? 'btn-unban' : 'btn-ban'}" onclick="toggleBan('${u.identifier}', ${!u.isBanned})">
-                  ${u.isBanned ? 'Unban' : 'Ban User'}
-                </button>
-              </td>
-            </tr>
-          `).join('');
+          tbody.innerHTML = data.users.length === 0 ? '<tr><td colspan="4" style="text-align: center;">No users registered yet</td></tr>' :
+            data.users.map(u => `
+              <tr>
+                <td style="font-weight: 600;">${u.identifier}</td>
+                <td><span class="badge badge-${u.channel}">${u.channel}</span></td>
+                <td><span class="badge ${u.isBanned ? 'badge-banned' : 'badge-active'}">${u.isBanned ? 'BANNED' : 'ACTIVE'}</span></td>
+                <td>
+                  <button class="btn-action ${u.isBanned ? 'btn-unban' : 'btn-ban'}" onclick="toggleBan('${u.identifier}', ${!u.isBanned})">
+                    ${u.isBanned ? 'Unban' : 'Ban User'}
+                  </button>
+                </td>
+              </tr>
+            `).join('');
         } else {
           adminLogout();
         }
@@ -172,19 +196,12 @@
 
     async function toggleBan(identifier, banStatus) {
       const token = localStorage.getItem('admin_token');
-      try {
-        const res = await fetch('/api/admin/toggle-ban', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`
-          },
-          body: JSON.stringify({ identifier, isBanned: banStatus })
-        });
-        if (res.ok) fetchMetrics();
-      } catch (e) {
-        alert('Action failed');
-      }
+      await fetch('/api/admin/toggle-ban', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ identifier, isBanned: banStatus })
+      });
+      fetchMetrics();
     }
 
     function adminLogout() {
