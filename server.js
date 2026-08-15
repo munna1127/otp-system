@@ -9,7 +9,7 @@ const path = require('path');
 const rateLimit = require('express-rate-limit');
 const Otp = require('./models/Otp');
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, proto, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
 const app = express();
@@ -21,37 +21,110 @@ let waSock = null;
 let isWaReady = false;
 let blockedAttemptsCounter = 0;
 
-// WhatsApp Connection Engine (No Terminal Readline)
-async function connectToWhatsApp() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-  const { version } = await fetchLatestBaileysVersion();
+// 1. MONGODB-BASED PERMANENT WHATSAPP SESSION (Survives all Render Deploys)
+const sessionSchema = new mongoose.Schema({
+  _id: { type: String, required: true },
+  data: { type: String, required: true }
+});
+const BaileysSession = mongoose.model('BaileysSession', sessionSchema);
 
-  waSock = makeWASocket({
-    version,
-    auth: state,
-    logger: pino({ level: 'silent' }),
-    printQRInTerminal: false,
-    browser: ["Ubuntu", "Chrome", "20.0.04"]
-  });
+async function useMongoAuthState() {
+  const writeData = async (data, id) => {
+    try {
+      await BaileysSession.findByIdAndUpdate(
+        id,
+        { data: JSON.stringify(data, BufferJSON.replacer) },
+        { upsert: true }
+      );
+    } catch (e) {}
+  };
 
-  waSock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect } = update;
-    if (connection === 'close') {
-      isWaReady = false;
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      if (shouldReconnect) connectToWhatsApp();
-    } else if (connection === 'open') {
-      isWaReady = true;
-      console.log('✅ [WHATSAPP READY] Self-Hosted WhatsApp Connected Successfully!');
+  const readData = async (id) => {
+    try {
+      const doc = await BaileysSession.findById(id);
+      if (!doc) return null;
+      return JSON.parse(doc.data, BufferJSON.reviver);
+    } catch (e) {
+      return null;
     }
-  });
+  };
 
-  waSock.ev.on('creds.update', saveCreds);
+  const removeData = async (id) => {
+    try {
+      await BaileysSession.findByIdAndDelete(id);
+    } catch (e) {}
+  };
+
+  const creds = (await readData('creds')) || initAuthCreds();
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readData(`${type}-${id}`);
+              if (type === 'app-state-sync-key' && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+              }
+              data[id] = value;
+            })
+          );
+          return data;
+        },
+        set: async (data) => {
+          const tasks = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id];
+              const key = `${category}-${id}`;
+              tasks.push(value ? writeData(value, key) : removeData(key));
+            }
+          }
+          await Promise.all(tasks);
+        }
+      }
+    },
+    saveCreds: () => writeData(creds, 'creds')
+  };
 }
 
-connectToWhatsApp();
+async function connectToWhatsApp() {
+  try {
+    const { state, saveCreds } = await useMongoAuthState();
+    const { version } = await fetchLatestBaileysVersion();
 
-// Database Schema
+    waSock = makeWASocket({
+      version,
+      auth: state,
+      logger: pino({ level: 'silent' }),
+      printQRInTerminal: false,
+      browser: ["Ubuntu", "Chrome", "20.0.04"]
+    });
+
+    waSock.ev.on('connection.update', (update) => {
+      const { connection, lastDisconnect } = update;
+      if (connection === 'close') {
+        isWaReady = false;
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        console.log('WhatsApp connection closed. Reconnecting...', shouldReconnect);
+        if (shouldReconnect) setTimeout(connectToWhatsApp, 3000);
+      } else if (connection === 'open') {
+        isWaReady = true;
+        console.log('✅ [WHATSAPP READY] MongoDB Session Connected Successfully!');
+      }
+    });
+
+    waSock.ev.on('creds.update', saveCreds);
+  } catch (err) {
+    console.error("WhatsApp Connection Error:", err);
+  }
+}
+
+// User Schema
 const userSchema = new mongoose.Schema({
   identifier: { type: String, required: true, unique: true },
   channel: { type: String, enum: ['email', 'telegram', 'whatsapp'], default: 'email' },
@@ -67,6 +140,8 @@ const User = mongoose.model('User', userSchema);
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
+const EMAIL_USER = process.env.EMAIL_USER || "aryantomar4329@gmail.com";
+const EMAIL_PASS = process.env.EMAIL_PASS || "keyyihkenfqsnohx";
 
 function requireAdmin(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -92,12 +167,15 @@ const otpLimiter = rateLimit({
   }
 });
 
+// Nodemailer with direct configuration & pooling
 const transporter = nodemailer.createTransport({
   service: 'gmail',
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS
-  }
+    user: EMAIL_USER,
+    pass: EMAIL_PASS
+  },
+  pool: true,
+  maxConnections: 3
 });
 
 function cleanTarget(id, channel) {
@@ -109,7 +187,7 @@ function cleanTarget(id, channel) {
 }
 
 async function sendBaileysWhatsApp(phone, otp, meta) {
-  if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is not linked yet. Open /admin to generate Pairing Code.');
+  if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is not linked. Open /admin to generate Pairing Code.');
   const jid = `${phone}@s.whatsapp.net`;
 
   await waSock.sendMessage(jid, {
@@ -176,49 +254,7 @@ app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
   }
 });
 
-// --- PUBLIC EXTERNAL API (Use this in any React/Python/Website Project) ---
-app.post('/api/v1/send-otp', async (req, res) => {
-  try {
-    const { secret_key, identifier, channel } = req.body;
-    if (secret_key !== process.env.API_SECRET && secret_key !== "AryanSecure2026") {
-      return res.status(401).json({ error: "Invalid API Secret Key" });
-    }
-    if (!identifier) return res.status(400).json({ error: "Identifier required" });
-
-    const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
-    const target = cleanTarget(identifier, selectedChannel);
-
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    const userAgent = req.headers['user-agent'] || 'API Client';
-
-    await Otp.deleteMany({ identifier: target });
-
-    const rawOtp = crypto.randomInt(100000, 999999).toString();
-    const salt = await bcrypt.genSalt(10);
-    const otpHash = await bcrypt.hash(rawOtp, salt);
-
-    await Otp.create({ identifier: target, channel: selectedChannel, otpHash });
-
-    if (selectedChannel === 'email') {
-      await transporter.sendMail({
-        from: `"Auth Service" <${process.env.EMAIL_USER}>`,
-        to: target,
-        subject: `${rawOtp} is your verification code`,
-        html: `<h2>Your OTP: <b style="color:#6366f1;">${rawOtp}</b></h2>`
-      });
-    } else if (selectedChannel === 'whatsapp') {
-      await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
-    } else if (selectedChannel === 'telegram') {
-      await sendTelegramOTP(target, rawOtp);
-    }
-
-    res.status(200).json({ success: true, message: `OTP sent via ${selectedChannel.toUpperCase()}` });
-  } catch (error) {
-    res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
-  }
-});
-
-// --- 1. WEB SEND OTP ROUTE ---
+// --- 1. SEND OTP ROUTE ---
 app.post('/api/send-otp', otpLimiter, async (req, res) => {
   try {
     const { identifier, channel } = req.body;
@@ -244,12 +280,16 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
 
     await Otp.create({ identifier: target, channel: selectedChannel, otpHash });
 
+    console.log(`\n========================================`);
+    console.log(`⚡ OTP: ${rawOtp} | Target: ${target} (${selectedChannel})`);
+    console.log(`========================================`);
+
     if (selectedChannel === 'email') {
       await transporter.sendMail({
-        from: `"Auth Service" <${process.env.EMAIL_USER}>`,
+        from: `"Security Auth" <${EMAIL_USER}>`,
         to: target,
         subject: `${rawOtp} is your verification code`,
-        html: `<h2>Your OTP: <b style="color:#6366f1;">${rawOtp}</b></h2>`
+        html: `<h2>Your OTP Code is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes.</p>`
       });
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
@@ -259,6 +299,7 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
 
     res.status(200).json({ success: true, message: `OTP sent via ${selectedChannel.toUpperCase()}` });
   } catch (error) {
+    console.error("Send Error:", error);
     res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
   }
 });
@@ -322,16 +363,20 @@ app.post('/api/verify-otp', async (req, res) => {
 
     res.status(200).json({ success: true, token, user });
   } catch (error) {
+    console.error("Verification Error:", error);
     res.status(500).json({ error: "Server verification error" });
   }
 });
 
-mongoose.connect(process.env.MONGO_URI)
+const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
+
+mongoose.connect(MONGO_URI)
   .then(async () => {
     console.log("MongoDB Connected!");
     try {
       await mongoose.connection.collection('users').dropIndex('email_1');
     } catch (e) {}
+    connectToWhatsApp();
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   })
   .catch(err => console.error(err));
