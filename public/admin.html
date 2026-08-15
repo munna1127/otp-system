@@ -30,7 +30,7 @@
     .btn-ban { background: #ef4444; color: #fff; }
     .btn-unban { background: #10b981; color: #fff; }
     .btn-logout { background: #334155; padding: 8px 16px; border: none; border-radius: 8px; color: #fff; cursor: pointer; }
-    .code-box { font-size: 24px; font-weight: bold; color: #4ade80; letter-spacing: 4px; background: #0a0f1d; padding: 12px; border-radius: 8px; margin-top: 10px; display: none; text-align: center; }
+    .code-box { font-size: 26px; font-weight: bold; color: #4ade80; letter-spacing: 4px; background: #0a0f1d; padding: 14px; border-radius: 8px; margin-top: 12px; display: none; text-align: center; border: 1px dashed #4ade80; }
   </style>
 </head>
 <body>
@@ -58,8 +58,8 @@
 
     <!-- WhatsApp Link Control Card -->
     <div class="wa-card">
-      <h3>📲 WhatsApp Bot Connection</h3>
-      <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 14px 0;">Status: <span id="wa-status" style="font-weight: bold;">Checking...</span></p>
+      <h3>📲 WhatsApp Bot Device Connection</h3>
+      <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 14px 0;">Bot Connection Status: <span id="wa-status" style="font-weight: bold;">Checking...</span></p>
       <div style="display: flex; gap: 10px; max-width: 450px;">
         <input type="text" id="wa-phone" placeholder="919926888306" style="margin-bottom: 0;" />
         <button onclick="requestPairing()" style="width: auto; white-space: nowrap;">Get Pairing Code</button>
@@ -131,7 +131,7 @@
       if (!phone) return alert('Enter phone number with 91');
 
       box.style.display = 'block';
-      box.textContent = 'Generating...';
+      box.textContent = 'Generating pairing code...';
 
       try {
         const res = await fetch('/api/admin/generate-pairing', {
@@ -144,12 +144,12 @@
         });
         const data = await res.json();
         if (data.success && data.code) {
-          box.textContent = data.code;
+          box.innerHTML = `Pairing Code: <span style="color:#38bdf8;">${data.code}</span><br><small style="font-size:12px; color:#94a3b8; font-weight:normal;">Open WhatsApp > Linked Devices > Link with phone number instead</small>`;
         } else {
-          box.textContent = data.error || 'Error getting code';
+          box.textContent = data.error || 'Error generating code';
         }
       } catch (e) {
-        box.textContent = 'Failed to fetch code';
+        box.textContent = 'Failed to fetch code from server';
       }
     }
 
@@ -169,7 +169,7 @@
           document.getElementById('rate-blocks').textContent = data.blockedAttempts || 0;
           
           const status = document.getElementById('wa-status');
-          status.textContent = data.isWaReady ? '🟢 CONNECTED' : '🔴 NOT CONNECTED';
+          status.textContent = data.isWaReady ? '🟢 CONNECTED' : '🔴 NOT CONNECTED (Link below)';
           status.style.color = data.isWaReady ? '#4ade80' : '#f87171';
 
           const tbody = document.getElementById('user-rows');

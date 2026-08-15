@@ -21,7 +21,7 @@ let waSock = null;
 let isWaReady = false;
 let blockedAttemptsCounter = 0;
 
-// WhatsApp Engine
+// WhatsApp Connection Engine (No Terminal Readline)
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
   const { version } = await fetchLatestBaileysVersion();
@@ -51,7 +51,7 @@ async function connectToWhatsApp() {
 
 connectToWhatsApp();
 
-// User Schema
+// Database Schema
 const userSchema = new mongoose.Schema({
   identifier: { type: String, required: true, unique: true },
   channel: { type: String, enum: ['email', 'telegram', 'whatsapp'], default: 'email' },
@@ -85,7 +85,7 @@ function requireAdmin(req, res, next) {
 
 const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 50,
+  max: 60,
   handler: (req, res) => {
     blockedAttemptsCounter++;
     res.status(429).json({ error: "Rate limit exceeded. Access temporarily blocked." });
@@ -109,7 +109,7 @@ function cleanTarget(id, channel) {
 }
 
 async function sendBaileysWhatsApp(phone, otp, meta) {
-  if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is not linked. Open /admin to generate Pairing Code.');
+  if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is not linked yet. Open /admin to generate Pairing Code.');
   const jid = `${phone}@s.whatsapp.net`;
 
   await waSock.sendMessage(jid, {
@@ -176,7 +176,49 @@ app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
   }
 });
 
-// --- 1. SEND OTP ROUTE ---
+// --- PUBLIC EXTERNAL API (Use this in any React/Python/Website Project) ---
+app.post('/api/v1/send-otp', async (req, res) => {
+  try {
+    const { secret_key, identifier, channel } = req.body;
+    if (secret_key !== process.env.API_SECRET && secret_key !== "AryanSecure2026") {
+      return res.status(401).json({ error: "Invalid API Secret Key" });
+    }
+    if (!identifier) return res.status(400).json({ error: "Identifier required" });
+
+    const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
+    const target = cleanTarget(identifier, selectedChannel);
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || 'API Client';
+
+    await Otp.deleteMany({ identifier: target });
+
+    const rawOtp = crypto.randomInt(100000, 999999).toString();
+    const salt = await bcrypt.genSalt(10);
+    const otpHash = await bcrypt.hash(rawOtp, salt);
+
+    await Otp.create({ identifier: target, channel: selectedChannel, otpHash });
+
+    if (selectedChannel === 'email') {
+      await transporter.sendMail({
+        from: `"Auth Service" <${process.env.EMAIL_USER}>`,
+        to: target,
+        subject: `${rawOtp} is your verification code`,
+        html: `<h2>Your OTP: <b style="color:#6366f1;">${rawOtp}</b></h2>`
+      });
+    } else if (selectedChannel === 'whatsapp') {
+      await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
+    } else if (selectedChannel === 'telegram') {
+      await sendTelegramOTP(target, rawOtp);
+    }
+
+    res.status(200).json({ success: true, message: `OTP sent via ${selectedChannel.toUpperCase()}` });
+  } catch (error) {
+    res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
+  }
+});
+
+// --- 1. WEB SEND OTP ROUTE ---
 app.post('/api/send-otp', otpLimiter, async (req, res) => {
   try {
     const { identifier, channel } = req.body;
@@ -202,10 +244,6 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
 
     await Otp.create({ identifier: target, channel: selectedChannel, otpHash });
 
-    console.log(`\n========================================`);
-    console.log(`⚡ OTP Generated: ${rawOtp} | Target: ${target} (${selectedChannel})`);
-    console.log(`========================================`);
-
     if (selectedChannel === 'email') {
       await transporter.sendMail({
         from: `"Auth Service" <${process.env.EMAIL_USER}>`,
@@ -221,7 +259,6 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
 
     res.status(200).json({ success: true, message: `OTP sent via ${selectedChannel.toUpperCase()}` });
   } catch (error) {
-    console.error("Send Error:", error.message || error);
     res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
   }
 });
@@ -285,12 +322,10 @@ app.post('/api/verify-otp', async (req, res) => {
 
     res.status(200).json({ success: true, token, user });
   } catch (error) {
-    console.error("Verification Error:", error);
     res.status(500).json({ error: "Server verification error" });
   }
 });
 
-// Auto-Drop Legacy Duplicate Indexes on Startup
 mongoose.connect(process.env.MONGO_URI)
   .then(async () => {
     console.log("MongoDB Connected!");
