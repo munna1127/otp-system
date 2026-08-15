@@ -17,17 +17,15 @@
     input:focus { border-color: #6366f1; }
     .btn { width: 100%; padding: 14px; background: #6366f1; border: none; border-radius: 10px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }
     .btn:disabled { opacity: 0.6; cursor: not-allowed; }
-    .btn-tg { background: #0284c7; margin-bottom: 16px; }
+    .btn-tg { background: #0284c7; margin-top: 10px; }
     .otp-inputs { display: flex; gap: 8px; justify-content: center; margin-bottom: 20px; }
     .otp-box { width: 45px; height: 50px; text-align: center; font-size: 20px; font-weight: bold; border-radius: 8px; border: 1px solid #334155; background: #0a0f1d; color: #fff; }
     .msg { margin-top: 14px; font-size: 13px; min-height: 18px; }
     .msg-error { color: #f87171; }
-    .msg-success { color: #4ade80; }
   </style>
 </head>
 <body>
 
-  <!-- STEP 1: SEND OTP -->
   <div class="card" id="step-send">
     <h2>Multi-Channel Auth</h2>
     <p class="sub">Choose where you want your verification OTP</p>
@@ -38,20 +36,18 @@
       <button class="channel-btn" onclick="selectChannel('whatsapp')" id="btn-whatsapp">💬 WhatsApp</button>
     </div>
 
-    <input type="text" id="target-input" placeholder="Enter Email (e.g. aryantomar4329@gmail.com)" />
+    <input type="text" id="target-input" placeholder="Enter Email/Phone" />
     <button class="btn" id="send-btn" onclick="sendOtp()">Send OTP</button>
     <div class="msg" id="send-msg"></div>
   </div>
 
-  <!-- STEP 2: VERIFY OTP -->
   <div class="card" id="step-verify" style="display: none;">
     <h2>Verification Code</h2>
-    <p class="sub" id="verify-sub">Code sent to your destination</p>
+    <p class="sub" id="verify-sub">Code sent</p>
+    
+    <a href="https://t.me/Otp_maaster_bot" target="_blank" id="tg-btn" class="btn btn-tg" style="display: none;">✈️ Open Telegram Bot</a>
 
-    <!-- Deep Link Telegram Button -->
-    <a href="#" target="_blank" id="tg-btn" class="btn btn-tg" style="display: none;">✈️ Click to Receive OTP on Telegram</a>
-
-    <div class="otp-inputs">
+    <div class="otp-inputs" style="margin-top: 20px;">
       <input type="text" maxlength="1" class="otp-box" oninput="moveNext(this, 0)" />
       <input type="text" maxlength="1" class="otp-box" oninput="moveNext(this, 1)" />
       <input type="text" maxlength="1" class="otp-box" oninput="moveNext(this, 2)" />
@@ -61,21 +57,7 @@
     </div>
 
     <button class="btn" id="verify-btn" onclick="verifyOtp()">Verify Code</button>
-    <div style="margin-top: 14px;"><a href="#" onclick="location.reload()" style="color: #818cf8; font-size: 13px; text-decoration: none;">Resend OTP</a></div>
     <div class="msg" id="verify-msg"></div>
-  </div>
-
-  <!-- STEP 3: DASHBOARD -->
-  <div class="card" id="step-dash" style="display: none;">
-    <div style="font-size: 40px; margin-bottom: 10px;">🎉</div>
-    <h2>Authenticated!</h2>
-    <p class="sub">You are successfully logged in</p>
-    <div style="background: #0a0f1d; padding: 14px; border-radius: 10px; text-align: left; font-size: 13px; color: #94a3b8; line-height: 1.6; margin-bottom: 20px;">
-      <div>Target: <b id="dash-user" style="color: #fff;"></b></div>
-      <div>Channel: <b id="dash-channel" style="color: #fff;"></b></div>
-      <div>Role: <b id="dash-role" style="color: #4ade80;">Member</b></div>
-    </div>
-    <button class="btn" onclick="logout()">Sign Out</button>
   </div>
 
   <script>
@@ -86,32 +68,12 @@
       activeChannel = ch;
       document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
       document.getElementById('btn-' + ch).classList.add('active');
-      const input = document.getElementById('target-input');
-      
-      if (ch === 'email') {
-        input.placeholder = 'Enter Email (e.g. aryantomar4329@gmail.com)';
-      } else if (ch === 'telegram') {
-        input.placeholder = 'Enter Phone (9926888306) OR Chat ID';
-      } else {
-        input.placeholder = 'Enter Phone (e.g. 9926888306)';
-      }
     }
 
     async function sendOtp() {
       const input = document.getElementById('target-input');
-      const btn = document.getElementById('send-btn');
       const msg = document.getElementById('send-msg');
       currentTarget = input.value.trim();
-
-      if (!currentTarget) {
-        msg.className = 'msg msg-error';
-        msg.textContent = 'Please enter valid detail';
-        return;
-      }
-
-      btn.disabled = true;
-      btn.textContent = 'Sending...';
-      msg.textContent = '';
 
       try {
         const res = await fetch('/api/send-otp', {
@@ -124,78 +86,27 @@
         if (res.ok) {
           document.getElementById('step-send').style.display = 'none';
           document.getElementById('step-verify').style.display = 'block';
-          document.getElementById('verify-sub').textContent = `Code requested for ${currentTarget}`;
-
-          if (activeChannel === 'telegram' && data.telegramDeepLink) {
-            const tgBtn = document.getElementById('tg-btn');
-            tgBtn.href = data.telegramDeepLink;
-            tgBtn.style.display = 'block';
-          } else {
-            document.getElementById('tg-btn').style.display = 'none';
+          
+          // Telegram button always show if channel is telegram
+          if (activeChannel === 'telegram') {
+            document.getElementById('tg-btn').style.display = 'block';
           }
-
-          document.querySelectorAll('.otp-box')[0].focus();
         } else {
-          msg.className = 'msg msg-error';
-          msg.textContent = data.error || 'Failed to dispatch OTP';
+          msg.textContent = data.error;
         }
-      } catch (e) {
-        msg.className = 'msg msg-error';
-        msg.textContent = 'Network / Server Error';
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Send OTP';
-      }
+      } catch (e) { msg.textContent = 'Server Error'; }
     }
 
-    function moveNext(el, idx) {
-      const boxes = document.querySelectorAll('.otp-box');
-      if (el.value && idx < 5) boxes[idx + 1].focus();
-    }
+    function moveNext(el, idx) { if (el.value && idx < 5) document.querySelectorAll('.otp-box')[idx + 1].focus(); }
 
     async function verifyOtp() {
-      const boxes = document.querySelectorAll('.otp-box');
-      const otp = Array.from(boxes).map(b => b.value).join('');
-      const msg = document.getElementById('verify-msg');
-      const btn = document.getElementById('verify-btn');
-
-      if (otp.length < 6) {
-        msg.className = 'msg msg-error';
-        msg.textContent = 'Enter complete 6-digit code';
-        return;
-      }
-
-      btn.disabled = true;
-      btn.textContent = 'Verifying...';
-
-      try {
-        const res = await fetch('/api/verify-otp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier: currentTarget, otp })
-        });
-        const data = await res.json();
-
-        if (res.ok) {
-          document.getElementById('step-verify').style.display = 'none';
-          document.getElementById('step-dash').style.display = 'block';
-          document.getElementById('dash-user').textContent = data.user.identifier;
-          document.getElementById('dash-channel').textContent = data.user.channel.toUpperCase();
-        } else {
-          msg.className = 'msg msg-error';
-          msg.textContent = data.error || 'Invalid code';
-        }
-      } catch (e) {
-        msg.className = 'msg msg-error';
-        msg.textContent = 'Verification error';
-      } finally {
-        btn.disabled = false;
-        btn.textContent = 'Verify Code';
-      }
-    }
-
-    function logout() {
-      location.reload();
+      const otp = Array.from(document.querySelectorAll('.otp-box')).map(b => b.value).join('');
+      const res = await fetch('/api/verify-otp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: currentTarget, otp })
+      });
+      if (res.ok) alert('Verified!'); else alert('Invalid');
     }
   </script>
 </body>
