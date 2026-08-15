@@ -13,8 +13,6 @@ const { default: makeWASocket, DisconnectReason, fetchLatestBaileysVersion, prot
 const pino = require('pino');
 
 const app = express();
-
-// Fix Render Reverse Proxy
 app.set('trust proxy', 1);
 
 app.use(express.json());
@@ -25,7 +23,15 @@ let waSock = null;
 let isWaReady = false;
 let blockedAttemptsCounter = 0;
 
-// MongoDB Session Store for WhatsApp
+// Hardcoded Master Fallbacks
+const EMAIL_USER = process.env.EMAIL_USER || "aryantomar4329@gmail.com";
+const EMAIL_PASS = process.env.EMAIL_PASS || "keyyihkenfqsnohx";
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
+const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
+const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
+
+// 1. MONGODB SESSION STORE FOR WHATSAPP
 const sessionSchema = new mongoose.Schema({
   _id: { type: String, required: true },
   data: { type: String, required: true }
@@ -140,12 +146,6 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
-const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
-const EMAIL_USER = process.env.EMAIL_USER || "aryantomar4329@gmail.com";
-const EMAIL_PASS = process.env.EMAIL_PASS || "keyyihkenfqsnohx";
-
 function requireAdmin(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
@@ -161,7 +161,6 @@ function requireAdmin(req, res, next) {
   }
 }
 
-// Rate Limiter with proxy support
 const otpLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 60,
@@ -172,16 +171,20 @@ const otpLimiter = rateLimit({
   }
 });
 
-// Production SMTP Connection (Explicit Host & Port)
+// Render-Proof IPv4 Explicit Gmail Transporter
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
+  port: 587,
+  secure: false, // STARTTLS
+  family: 4,     // Force IPv4 (Prevents Render IPv6 ETIMEDOUT)
   auth: {
     user: EMAIL_USER,
     pass: EMAIL_PASS
   },
-  connectionTimeout: 10000
+  tls: {
+    rejectUnauthorized: false
+  },
+  connectionTimeout: 15000
 });
 
 function cleanTarget(id, channel) {
@@ -292,10 +295,10 @@ app.post('/api/send-otp', otpLimiter, async (req, res) => {
 
     if (selectedChannel === 'email') {
       await transporter.sendMail({
-        from: `"Security Auth" <${EMAIL_USER}>`,
+        from: `"Security Verification" <${EMAIL_USER}>`,
         to: target,
         subject: `${rawOtp} is your verification code`,
-        html: `<h2>Your OTP Code is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes.</p>`
+        html: `<h2>Your Verification OTP is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes. Do not share this code.</p>`
       });
     } else if (selectedChannel === 'whatsapp') {
       await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
@@ -373,8 +376,6 @@ app.post('/api/verify-otp', async (req, res) => {
     res.status(500).json({ error: "Server verification error" });
   }
 });
-
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
 
 mongoose.connect(MONGO_URI)
   .then(async () => {
