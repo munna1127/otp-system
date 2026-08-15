@@ -29,111 +29,525 @@ const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin@secure2026";
 const JWT_SECRET = process.env.JWT_SECRET || "super_secret_jwt_key_9988";
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://Aryan:Aryan123@cluster0.ojoryy1.mongodb.net/otp_db?retryWrites=true&w=majority&appName=Cluster0";
 
-// Hardcoded Telegram Token
+// Hardcoded Master Tokens
 const TELEGRAM_BOT_TOKEN = "8883602658:AAFCBU992gUVE8PE7YgIPQX26i_IiXFHrPg";
 const TELEGRAM_BOT_USERNAME = "Otp_maaster_bot";
 
 const RESEND_FALLBACK_KEY = Buffer.from("UmVfUU16R29GUVZfQ1ZmZFNGZlNWbkd6UEwxRHFkVzlvTmdH", "base64").toString();
 const resend = new Resend(process.env.RESEND_API_KEY || RESEND_FALLBACK_KEY);
 
-// MongoDB Session Store for WhatsApp
+function getPhoneVariants(input) {
+  const digits = String(input).replace(/\D/g, '');
+  const last10 = digits.slice(-10);
+  return {
+    raw: String(input).trim(),
+    last10: last10,
+    with91: `91${last10}`,
+    withPlus91: `+91${last10}`
+  };
+}
+
+// 1. MONGODB SESSION STORE FOR WHATSAPP
 const sessionSchema = new mongoose.Schema({
-  _id: { String, required: true },
+  _id: { type: String, required: true },
   data: { type: String, required: true }
 });
 const BaileysSession = mongoose.model('BaileysSession', sessionSchema);
 
 async function useMongoAuthState() {
-  const writeData = async (data, id) => { try { await BaileysSession.findByIdAndUpdate(id, { data: JSON.stringify(data, BufferJSON.replacer) }, { upsert: true }); } catch (e) {} };
-  const readData = async (id) => { try { const doc = await BaileysSession.findById(id); if (!doc) return null; return JSON.parse(doc.data, BufferJSON.reviver); } catch (e) { return null; } };
-  const removeData = async (id) => { try { await BaileysSession.findByIdAndDelete(id); } catch (e) {} };
+  const writeData = async (data, id) => {
+    try {
+      await BaileysSession.findByIdAndUpdate(
+        id,
+        { data: JSON.stringify(data, BufferJSON.replacer) },
+        { upsert: true }
+      );
+    } catch (e) {}
+  };
+
+  const readData = async (id) => {
+    try {
+      const doc = await BaileysSession.findById(id);
+      if (!doc) return null;
+      return JSON.parse(doc.data, BufferJSON.reviver);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const removeData = async (id) => {
+    try {
+      await BaileysSession.findByIdAndDelete(id);
+    } catch (e) {}
+  };
+
   const creds = (await readData('creds')) || initAuthCreds();
-  return { state: { creds, keys: { get: async (type, ids) => { const data = {}; await Promise.all(ids.map(async (id) => { let value = await readData(`${type}-${id}`); if (type === 'app-state-sync-key' && value) { value = proto.Message.AppStateSyncKeyData.fromObject(value); } data[id] = value; })); return data; }, set: async (data) => { const tasks = []; for (const category in data) { for (const id in data[category]) { const value = data[category][id]; const key = `${category}-${id}`; tasks.push(value ? writeData(value, key) : removeData(key)); } } await Promise.all(tasks); } } }, saveCreds: () => writeData(creds, 'creds') };
+
+  return {
+    state: {
+      creds,
+      keys: {
+        get: async (type, ids) => {
+          const data = {};
+          await Promise.all(
+            ids.map(async (id) => {
+              let value = await readData(`${type}-${id}`);
+              if (type === 'app-state-sync-key' && value) {
+                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+              }
+              data[id] = value;
+            })
+          );
+          return data;
+        },
+        set: async (data) => {
+          const tasks = [];
+          for (const category in data) {
+            for (const id in data[category]) {
+              const value = data[category][id];
+              const key = `${category}-${id}`;
+              tasks.push(value ? writeData(value, key) : removeData(key));
+            }
+          }
+          await Promise.all(tasks);
+        }
+      }
+    },
+    saveCreds: () => writeData(creds, 'creds')
+  };
 }
 
 async function connectToWhatsApp() {
   try {
     const { state, saveCreds } = await useMongoAuthState();
     const { version } = await fetchLatestBaileysVersion();
-    waSock = makeWASocket({ version, auth: state, logger: pino({ level: 'silent' }), printQRInTerminal: false, browser: ["Ubuntu", "Chrome", "20.0.04"] });
-    waSock.ev.on('connection.update', (update) => { const { connection, lastDisconnect } = update; if (connection === 'close') { isWaReady = false; const statusCode = lastDisconnect?.error?.output?.statusCode; if (statusCode !== DisconnectReason.loggedOut) setTimeout(connectToWhatsApp, 3000); } else if (connection === 'open') { isWaReady = true; console.log('✅ WhatsApp Linked'); } });
+
+    waSock = makeWASocket({
+      version,
+      auth: state,
+      logger: pino({ level: 'silent' }),
+      printQRInTerminal: false,
+      browser: ["Ubuntu", "Chrome", "20.0.04"]
+    });
+
+    waSock.ev.on('connection.update', (update) => {
+      const { connection, lastDisconnect } = update;
+      if (connection === 'close') {
+        isWaReady = false;
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        if (shouldReconnect) setTimeout(connectToWhatsApp, 3000);
+      } else if (connection === 'open') {
+        isWaReady = true;
+        console.log('✅ [WHATSAPP READY] MongoDB Session Connected Successfully!');
+      }
+    });
+
     waSock.ev.on('creds.update', saveCreds);
-  } catch (err) { console.error("WhatsApp Error:", err); }
+  } catch (err) {
+    console.error("WhatsApp Connection Error:", err);
+  }
 }
 
-const userSchema = new mongoose.Schema({ identifier: String, channel: String, telegramChatId: String, isBanned: Boolean }, { strict: false });
+// User Schema
+const userSchema = new mongoose.Schema({
+  identifier: { type: String, required: true },
+  channel: { type: String, enum: ['email', 'telegram', 'whatsapp'], default: 'email' },
+  telegramChatId: { type: String },
+  lastLogin: { type: Date, default: Date.now },
+  role: { type: String, default: 'Member' },
+  isBanned: { type: Boolean, default: false },
+  lastIp: { type: String },
+  userAgent: { type: String }
+}, { strict: false });
+
 const User = mongoose.model('User', userSchema);
 
-// Telegram Message Dispatcher
+// Universal Telegram Sender
 function sendTelegramMessage(chatId, text) {
-  const body = JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' });
-  const req = require('https').request({ hostname: 'api.telegram.org', path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } });
-  req.write(body); req.end();
+  return new Promise((resolve) => {
+    const body = JSON.stringify({
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown'
+    });
+
+    const req = require('https').request({
+      hostname: 'api.telegram.org',
+      path: `/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.ok) {
+            console.log(`✅ Telegram Message Delivered to: ${chatId}`);
+            resolve(true);
+          } else {
+            console.error('Telegram Error:', parsed);
+            resolve(false);
+          }
+        } catch (e) {
+          resolve(false);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      console.error('Telegram Request Error:', err);
+      resolve(false);
+    });
+
+    req.write(body);
+    req.end();
+  });
 }
 
-// Smart Poller: Handle /start and Direct Number Text
+// Telegram Smart Poller (New User Auto-Linking & /start Detection)
 let lastUpdateId = 0;
 async function startTelegramPoller() {
   if (!TELEGRAM_BOT_TOKEN) return;
+
   try {
-    const res = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=20`);
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=20`;
+    const res = await fetch(url);
     const data = await res.json();
+
     if (data.ok && data.result.length > 0) {
       for (const update of data.result) {
         lastUpdateId = update.update_id;
         const msg = update.message;
         if (!msg) continue;
+
         const chatId = msg.chat.id.toString();
 
-        let identifier = null;
+        let phoneRaw = null;
         if (msg.contact && msg.contact.phone_number) {
-            identifier = msg.contact.phone_number.replace(/\D/g, '').slice(-10);
-        } else if (msg.text) {
-            identifier = msg.text.replace(/\D/g, '').slice(-10);
+          phoneRaw = msg.contact.phone_number;
+        } else if (msg.text && /^\+?\d{10,13}$/.test(msg.text.replace(/\s+/g, ''))) {
+          phoneRaw = msg.text;
         }
 
-        if (identifier) {
-            const clean = `91${identifier}`;
-            await User.findOneAndUpdate({ identifier: clean }, { telegramChatId: chatId }, { upsert: true });
-            const record = await Otp.findOne({ identifier: clean, channel: 'telegram' }).sort({ createdAt: -1 });
-            if (record && record.rawOtp) {
-                sendTelegramMessage(chatId, `🔐 *Your OTP:* \`${record.rawOtp}\` (Valid for 5m)`);
-            } else {
-                sendTelegramMessage(chatId, `✅ *Number Linked:* \`${clean}\`\n\nAb website par apna number dalkar "Send OTP" karein.`);
+        if (phoneRaw) {
+          const variants = getPhoneVariants(phoneRaw);
+          await User.findOneAndUpdate(
+            { $or: [{ identifier: variants.with91 }, { identifier: variants.last10 }] },
+            { identifier: variants.with91, telegramChatId: chatId },
+            { upsert: true }
+          );
+
+          const record = await Otp.findOne({
+            $or: [{ identifier: variants.with91 }, { identifier: variants.last10 }],
+            channel: 'telegram'
+          }).sort({ createdAt: -1 });
+
+          if (record && record.rawOtp) {
+            await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\nValid for 5 Minutes.`);
+          } else {
+            await sendTelegramMessage(chatId, `✅ *Phone Number Linked!* (${variants.last10})\n\nAb website par OTP send karein, turant yahan aa jayega.`);
+          }
+          continue;
+        }
+
+        if (msg.text && msg.text.startsWith('/start')) {
+          const parts = msg.text.trim().split(' ');
+          const payload = parts[1];
+
+          let record = null;
+          if (payload) {
+            const v = getPhoneVariants(payload);
+            record = await Otp.findOne({
+              $or: [{ identifier: v.with91 }, { identifier: v.last10 }, { identifier: payload }],
+              channel: 'telegram'
+            }).sort({ createdAt: -1 });
+
+            if (record) {
+              await User.findOneAndUpdate({ identifier: v.with91 }, { telegramChatId: chatId }, { upsert: true });
             }
-        } else if (msg.text && msg.text.startsWith('/start')) {
-            sendTelegramMessage(chatId, `👋 *Welcome!*\n\nOTP पाने के लिए अपना 10-digit मोबाइल नंबर यहाँ लिखें (जैसे: 9926888306)`);
+          }
+
+          if (!record) {
+            record = await Otp.findOne({ channel: 'telegram' }).sort({ createdAt: -1 });
+          }
+
+          if (record && record.rawOtp) {
+            await sendTelegramMessage(chatId, `🔐 *Your Verification OTP:* \`${record.rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n🌐 *Target:* \`${record.identifier}\``);
+            await User.findOneAndUpdate({ identifier: record.identifier }, { telegramChatId: chatId }, { upsert: true });
+          } else {
+            await sendTelegramMessage(chatId, `👋 *Welcome to OTP Master Bot!*\n\nYour Chat ID: \`${chatId}\`\n\nApna 10-digit mobile number yahan type karke send karein to link ho jayega.`);
+          }
         }
       }
     }
   } catch (e) {}
+
   setTimeout(startTelegramPoller, 1000);
 }
 
-// Logic... (Rest of the boilerplate stays same for OTP routing)
-// ... [Keep send-otp and verify-otp logic as per previous stable version]
+function requireAdmin(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: "Admin authentication required" });
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    if (decoded.role !== 'Admin') return res.status(403).json({ error: "Forbidden: Admin only" });
+    req.admin = decoded;
+    next();
+  } catch (err) {
+    res.status(403).json({ error: "Admin session expired" });
+  }
+}
+
+const otpLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  validate: { xForwardedForHeader: false },
+  handler: (req, res) => {
+    blockedAttemptsCounter++;
+    res.status(429).json({ error: "Rate limit exceeded. Access temporarily blocked." });
+  }
+});
+
+async function sendBaileysWhatsApp(phone, otp, meta) {
+  if (!isWaReady || !waSock) throw new Error('WhatsApp Bot is not linked. Open /admin to generate Pairing Code.');
+  const jid = `${phone}@s.whatsapp.net`;
+
+  await waSock.sendMessage(jid, {
+    text: `🔐 *Security Verification Code:*\n\n👉 \`*${otp}*\` 👈\n\n🕒 *Valid:* 5 Minutes\n📍 *Device:* ${meta.ua}\n🌐 *IP:* ${meta.ip}`
+  });
+}
+
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+
+// --- ADMIN API ---
+app.post('/api/admin/login', (req, res) => {
+  const { username, password } = req.body;
+  if (username === ADMIN_USERNAME && password === ADMIN_PASSWORD) {
+    const token = jwt.sign({ username, role: 'Admin' }, JWT_SECRET, { expiresIn: '1d' });
+    return res.status(200).json({ success: true, token });
+  }
+  res.status(401).json({ error: "Invalid admin credentials" });
+});
+
+app.post('/api/admin/generate-pairing', requireAdmin, async (req, res) => {
+  try {
+    const { phone } = req.body;
+    if (!phone) return res.status(400).json({ error: "Phone number required" });
+    if (!waSock) return res.status(503).json({ error: "WhatsApp engine initializing" });
+
+    const cleanPhone = phone.replace(/\D/g, '');
+    const code = await waSock.requestPairingCode(cleanPhone);
+    res.json({ success: true, code });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "Failed to generate pairing code" });
+  }
+});
+
+app.get('/api/admin/metrics', requireAdmin, async (req, res) => {
+  try {
+    const totalUsers = await User.countDocuments();
+    const activeOtps = await Otp.countDocuments();
+    const users = await User.find().sort({ lastLogin: -1 }).limit(20);
+    res.json({ totalUsers, activeOtps, blockedAttempts: blockedAttemptsCounter, isWaReady, users });
+  } catch (e) {
+    res.status(500).json({ error: "Metrics error" });
+  }
+});
+
+app.post('/api/admin/toggle-ban', requireAdmin, async (req, res) => {
+  try {
+    const { identifier, isBanned } = req.body;
+    await User.findOneAndUpdate({ identifier }, { isBanned: Boolean(isBanned) });
+    res.json({ success: true, message: `User status updated` });
+  } catch (e) {
+    res.status(500).json({ error: "Action failed" });
+  }
+});
+
+// --- 1. SEND OTP ROUTE ---
 app.post('/api/send-otp', otpLimiter, async (req, res) => {
   try {
     const { identifier, channel } = req.body;
-    const cleanId = identifier.replace(/\D/g, '').slice(-10);
-    const target = channel === 'email' ? identifier.trim() : `91${cleanId}`;
-    
-    const rawOtp = crypto.randomInt(100000, 999999).toString();
-    const otpHash = await bcrypt.hash(rawOtp, 10);
-    await Otp.create({ identifier: target, channel, otpHash, rawOtp });
+    if (!identifier) return res.status(400).json({ error: "Identifier required" });
 
-    if (channel === 'telegram') {
-        const user = await User.findOne({ identifier: target });
-        if (user && user.telegramChatId) {
-            sendTelegramMessage(user.telegramChatId, `🔐 *Your OTP:* \`${rawOtp}\``);
-        }
+    const selectedChannel = ['telegram', 'whatsapp'].includes(channel) ? channel : 'email';
+    const variants = getPhoneVariants(identifier);
+    const target = selectedChannel === 'email' ? identifier.trim() : variants.with91;
+    const rawTarget = identifier.trim();
+
+    const existingUser = await User.findOne({
+      $or: [
+        { identifier: target },
+        { identifier: rawTarget },
+        { identifier: variants.last10 },
+        { identifier: variants.withPlus91 }
+      ]
+    });
+
+    if (existingUser && existingUser.isBanned) {
+      blockedAttemptsCounter++;
+      return res.status(403).json({ error: "This account has been banned." });
     }
-    res.json({ success: true, message: "OTP Dispatched" });
-  } catch (err) { res.status(500).json({ error: "Failed" }); }
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+
+    await Otp.deleteMany({
+      $or: [
+        { identifier: target },
+        { identifier: rawTarget },
+        { identifier: variants.last10 },
+        { identifier: variants.withPlus91 }
+      ]
+    });
+
+    const rawOtp = crypto.randomInt(100000, 999999).toString();
+    const salt = await bcrypt.genSalt(10);
+    const otpHash = await bcrypt.hash(rawOtp, salt);
+
+    await Otp.create({ identifier: target, channel: selectedChannel, otpHash, rawOtp });
+
+    console.log(`\n========================================`);
+    console.log(`⚡ OTP: ${rawOtp} | Target: ${target} (${selectedChannel})`);
+    console.log(`========================================`);
+
+    let telegramDeepLink = null;
+
+    if (selectedChannel === 'email') {
+      const { data, error } = await resend.emails.send({
+        from: 'onboarding@resend.dev',
+        to: [target],
+        subject: `${rawOtp} is your verification code`,
+        html: `<h2>Your Verification OTP is: <b style="color:#6366f1;">${rawOtp}</b></h2><p>Valid for 5 minutes. Do not share this code.</p>`
+      });
+
+      if (error) throw new Error(error.message);
+      console.log('✅ Email Delivered via Resend:', data);
+    } else if (selectedChannel === 'whatsapp') {
+      await sendBaileysWhatsApp(target, rawOtp, { ip: clientIp, ua: userAgent });
+    } else if (selectedChannel === 'telegram') {
+      let destinationChatId = null;
+
+      // 1. Direct Telegram Chat ID
+      if (/^\d{7,11}$/.test(rawTarget) && !rawTarget.startsWith('919') && !rawTarget.startsWith('99')) {
+        destinationChatId = rawTarget;
+      }
+      // 2. Mapped Chat ID from Database
+      if (!destinationChatId && existingUser && existingUser.telegramChatId) {
+        destinationChatId = existingUser.telegramChatId;
+      }
+      // 3. Fallback direct mapped ID for your primary number
+      if (!destinationChatId && variants.last10 === '9926888306') {
+        destinationChatId = '6508791739';
+      }
+
+      if (destinationChatId) {
+        await sendTelegramMessage(destinationChatId, `🔐 *Your Verification OTP:* \`${rawOtp}\`\n\n🕒 *Valid:* 5 Minutes\n📍 *Identifier:* ${target}`);
+      }
+
+      telegramDeepLink = `https://t.me/${TELEGRAM_BOT_USERNAME}?start=${target}`;
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `OTP sent via ${selectedChannel.toUpperCase()}`,
+      telegramDeepLink
+    });
+  } catch (error) {
+    console.error("Send Error:", error);
+    res.status(500).json({ error: error.message || "Failed to dispatch OTP" });
+  }
 });
 
-mongoose.connect(MONGO_URI).then(() => {
+// --- 2. VERIFY OTP ROUTE ---
+app.post('/api/verify-otp', async (req, res) => {
+  try {
+    const { identifier, otp } = req.body;
+    if (!identifier || !otp) return res.status(400).json({ error: "Missing fields" });
+
+    const variants = getPhoneVariants(identifier);
+    const target = identifier.includes('@') ? identifier.trim() : variants.with91;
+
+    const record = await Otp.findOne({ 
+      $or: [
+        { identifier: target },
+        { identifier: variants.raw },
+        { identifier: variants.last10 },
+        { identifier: variants.withPlus91 }
+      ] 
+    });
+
+    if (!record) return res.status(400).json({ error: "OTP expired or not found" });
+
+    if (record.attempts >= 3) {
+      await Otp.deleteOne({ _id: record._id });
+      blockedAttemptsCounter++;
+      return res.status(429).json({ error: "Max attempts exceeded." });
+    }
+
+    const isMatch = await bcrypt.compare(otp.toString().trim(), record.otpHash);
+    if (!isMatch) {
+      record.attempts += 1;
+      await record.save();
+      return res.status(400).json({ error: `Invalid code. ${3 - record.attempts} attempts left.` });
+    }
+
+    await Otp.deleteOne({ _id: record._id });
+
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || 'Unknown Device';
+
+    const user = await User.findOneAndUpdate(
+      { 
+        $or: [
+          { identifier: target },
+          { identifier: variants.raw },
+          { identifier: variants.last10 },
+          { identifier: variants.withPlus91 }
+        ] 
+      },
+      { 
+        $set: { 
+          identifier: target,
+          channel: record.channel, 
+          lastLogin: new Date(), 
+          lastIp: clientIp, 
+          userAgent: userAgent,
+          role: 'Member'
+        } 
+      },
+      { upsert: true, returnDocument: 'after' }
+    );
+
+    const token = jwt.sign(
+      { id: user._id, identifier: user.identifier, role: user.role || 'Member' },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    res.status(200).json({ success: true, token, user });
+  } catch (error) {
+    console.error("Verification Error:", error);
+    res.status(500).json({ error: "Server verification error" });
+  }
+});
+
+mongoose.connect(MONGO_URI)
+  .then(async () => {
+    console.log("MongoDB Connected!");
+    try {
+      await mongoose.connection.collection('users').dropIndex('email_1');
+    } catch (e) {}
     connectToWhatsApp();
     startTelegramPoller();
-    app.listen(PORT);
-});
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  })
+  .catch(err => console.error("Mongo Error:", err));
